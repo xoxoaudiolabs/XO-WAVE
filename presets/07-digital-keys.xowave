@@ -1,0 +1,16 @@
+name = Digital Keys
+a_table = Digital
+a_pos = 0.3
+b_table = Organ
+b_pos = 0.5
+b_level = 0.5
+cutoff = 7000
+filter_env = 0.2
+menv_pos = 0.5
+mod_decay = 0.4
+amp_decay = 1.2
+amp_sustain = 0.4
+amp_release = 0.4
+lfo_shape = 4
+lfo_rate = 6
+lfo_pos = 0.15

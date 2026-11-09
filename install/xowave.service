@@ -1,0 +1,21 @@
+[Unit]
+Description=XO-Wave wavetable synth
+After=sound.target bluetooth.target
+Wants=sound.target
+
+[Service]
+User=@USER@
+SupplementaryGroups=audio bluetooth input video
+# Max out CPU clock while playing (runs as root thanks to "+").
+ExecStartPre=+/bin/sh -c 'for g in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do echo performance > "$g"; done || true'
+# Keep the text console off the touchscreen.
+ExecStartPre=+/bin/sh -c 'for v in /sys/class/vtconsole/vtcon*; do grep -q "frame buffer" $v/name && echo 0 > $v/bind; done; true'
+ExecStart=/opt/xowave/xowave -c /etc/xowave.conf
+Restart=always
+RestartSec=2
+LimitRTPRIO=95
+LimitMEMLOCK=infinity
+Nice=-10
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,101 @@
+#!/usr/bin/env bash
+# Headless Bluetooth helper for XO-Wave.
+#   sudo xowave-bt scan                   find nearby devices (20 s)
+#   sudo xowave-bt pair <MAC> audio       pair a speaker/headphones and use it
+#   sudo xowave-bt pair <MAC> midi        pair a BLE MIDI controller
+#   sudo xowave-bt forget <MAC>           unpair and remove from config
+#   xowave-bt status                      show paired devices and MIDI ports
+set -uo pipefail
+CONF=/etc/xowave.conf
+export PATH="$PATH:/usr/sbin:/sbin"
+
+conf_get() { sed -n "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*\([^#]*\).*/\1/p" "$CONF" | tail -n1 | xargs; }
+conf_set() {
+    if grep -qE "^[[:space:]]*$1[[:space:]]*=" "$CONF"; then
+        sed -i -E "s|^[[:space:]]*$1[[:space:]]*=.*|$1 = $2|" "$CONF"
+    else
+        echo "$1 = $2" >> "$CONF"
+    fi
+}
+need_root() { [[ $EUID -eq 0 ]] || { echo "Run with sudo"; exit 1; }; }
+# Unblocks the radio (Raspberry Pi OS ships with Bluetooth soft-blocked) and powers it on.
+bt_ready() {
+    rfkill unblock bluetooth 2>/dev/null || for r in /sys/class/rfkill/rfkill*; do
+        [[ $(cat "$r/type" 2>/dev/null) == bluetooth ]] && echo 0 > "$r/soft" 2>/dev/null
+    done
+    for _ in 1 2 3 4 5; do
+        bluetoothctl show 2>/dev/null | grep -q "Powered: yes" && return 0
+        bluetoothctl power on >/dev/null 2>&1
+        sleep 1
+    done
+    echo "ERROR: Bluetooth radio won't power on (check 'rfkill list' and 'systemctl status bluetooth')."
+    exit 1
+}
+valid_mac() { [[ $1 =~ ^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$ ]] || { echo "Not a MAC address: $1"; exit 1; }; }
+
+cmd=${1:-status}
+case $cmd in
+scan)
+    need_root
+    bt_ready
+    echo "Scanning for 20 s - put your speaker / controller in pairing mode..."
+    bluetoothctl --timeout 20 scan on >/dev/null 2>&1
+    # Named devices first; devices that never sent a name show as their address.
+    list=$(bluetoothctl devices 2>/dev/null | grep '^Device ')
+    named=$(echo "$list" | awk '{n=$3; for(i=4;i<=NF;i++) n=n" "$i; m=$2; gsub(":","-",m); if (n!=m) print}')
+    unnamed=$(echo "$list" | awk '{n=$3; for(i=4;i<=NF;i++) n=n" "$i; m=$2; gsub(":","-",m); if (n==m) print}')
+    [[ -n $named ]] && echo "$named"
+    [[ -n $unnamed ]] && echo "$unnamed"
+    count=$(echo "$list" | grep -c '^Device ' || true)
+    echo "Found $count device(s)."
+    ;;
+pair)
+    need_root
+    mac=${2:?MAC address required}; kind=${3:?say audio or midi}
+    valid_mac "$mac"
+    bt_ready
+    clients_before=$(aconnect -l | grep -c '^client' || true)
+    echo "Pairing $mac ..."
+    # Make sure it's discovered first (BLE MIDI devices must be seen in a scan).
+    bluetoothctl --timeout 10 scan on >/dev/null 2>&1 || true
+    bluetoothctl --agent NoInputNoOutput pair "$mac" || echo "(pair returned an error - some devices don't need pairing, trying to connect)"
+    bluetoothctl trust "$mac"
+    bluetoothctl connect "$mac" || true
+    case $kind in
+    audio)
+        conf_set bluetooth.audio "$mac"
+        echo "Bluetooth audio set to $mac"
+        ;;
+    midi)
+        cur=$(conf_get bluetooth.midi)
+        [[ " $cur " == *" $mac "* ]] || conf_set bluetooth.midi "$(echo "$cur $mac" | xargs)"
+        sleep 3
+        clients_after=$(aconnect -l | grep -c '^client' || true)
+        if (( clients_after > clients_before )); then
+            echo "BLE MIDI port is up - XO-Wave connects to it automatically."
+        else
+            echo "!! No MIDI port appeared. Check 'aconnect -l'. If it never shows up, this BlueZ"
+            echo "   build lacks MIDI support (see README, 'Bluetooth MIDI')."
+        fi
+        ;;
+    *) echo "kind must be audio or midi"; exit 1 ;;
+    esac
+    systemctl restart xowave-bt-keeper xowave
+    ;;
+forget)
+    need_root
+    mac=${2:?MAC address required}; valid_mac "$mac"
+    bluetoothctl remove "$mac" || true
+    [[ $(conf_get bluetooth.audio) == "$mac" ]] && conf_set bluetooth.audio ""
+    conf_set bluetooth.midi "$(conf_get bluetooth.midi | tr ' ' '\n' | grep -vi "$mac" | xargs || true)"
+    systemctl restart xowave-bt-keeper xowave
+    ;;
+status)
+    echo "Audio:  $(conf_get bluetooth.audio)"
+    echo "MIDI:   $(conf_get bluetooth.midi)"
+    echo; echo "Paired devices:"; bluetoothctl devices Paired 2>/dev/null || bluetoothctl paired-devices
+    echo; echo "MIDI ports:"; aconnect -l
+    ;;
+*)
+    sed -n '2,8p' "$0"; exit 1 ;;
+esac

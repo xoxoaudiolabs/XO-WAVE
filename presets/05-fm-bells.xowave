@@ -1,0 +1,15 @@
+name = FM Bells
+a_table = FM
+a_pos = 0.55
+b_table = Basic Shapes
+b_level = 0.3
+b_semi = 24
+cutoff = 12000
+filter_env = 0
+menv_pos = -0.5
+mod_decay = 1.5
+amp_attack = 0.002
+amp_decay = 3.0
+amp_sustain = 0
+amp_release = 2.0
+vel_amp = 0.9

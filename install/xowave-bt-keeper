@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+# Keeps the Bluetooth speaker and BLE MIDI controllers listed in
+# /etc/xowave.conf connected: reconnects at boot and whenever they are
+# switched back on. Runs as root (xowave-bt-keeper.service).
+CONF=/etc/xowave.conf
+export PATH="$PATH:/usr/sbin:/sbin"
+
+conf_get() { sed -n "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*\([^#]*\).*/\1/p" "$CONF" | tail -n1 | xargs; }
+
+# The Pi 3's built-in Bluetooth chip sometimes fails its start-up after a
+# power cut ("hci0: command 0x0c14 tx timeout"); BlueZ then has no
+# controller at all. Reloading the chip's UART driver re-runs the start-up.
+missing=0
+last_reset=0
+resets=0
+reset_chip() {
+    local now drv dev
+    now=$(date +%s)
+    (( now - last_reset < 30 || resets >= 5 )) && return
+    drv=/sys/bus/serial/drivers/hci_uart_bcm
+    dev=$(ls "$drv" 2>/dev/null | grep '^serial' | head -n1)
+    [[ -z $dev ]] && dev=serial0-0
+    echo "bluetooth chip did not start; reloading its driver ($dev)"
+    echo "$dev" > "$drv/unbind" 2>/dev/null
+    sleep 2
+    echo "$dev" > "$drv/bind" 2>/dev/null
+    last_reset=$now
+    resets=$((resets + 1))
+    missing=0
+    sleep 5
+}
+
+# Raspberry Pi OS starts with the radio soft-blocked, and the first power-on
+# right after unblocking often fails ("Authentication Failed"), so check and
+# retry on every pass instead of once at start-up.
+ensure_power() {
+    rfkill unblock bluetooth 2>/dev/null
+    local show
+    show=$(bluetoothctl show 2>/dev/null)
+    if ! grep -q "^Controller" <<<"$show"; then
+        missing=$((missing + 1))
+        (( missing >= 3 )) && reset_chip   # ~10 s with no controller
+        return 1
+    fi
+    missing=0
+    if ! grep -q "Powered: yes" <<<"$show"; then
+        bluetoothctl power on >/dev/null 2>&1 && echo "radio powered on"
+        return 1
+    fi
+    return 0
+}
+
+start=$(date +%s)
+while true; do
+    if ensure_power; then
+        for mac in $(conf_get bluetooth.audio) $(conf_get bluetooth.midi); do
+            if ! bluetoothctl info "$mac" 2>/dev/null | grep -q "Connected: yes"; then
+                timeout 15 bluetoothctl connect "$mac" >/dev/null 2>&1 && echo "connected $mac"
+            fi
+        done
+    fi
+    # Try often for the first two minutes after boot, then every 10 s.
+    if (( $(date +%s) - start < 120 )); then sleep 3; else sleep 10; fi
+done

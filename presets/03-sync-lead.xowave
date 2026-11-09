@@ -1,0 +1,16 @@
+name = Sync Lead
+a_table = Sync Saw
+a_pos = 0.1
+a_unison = 2
+a_detune = 6
+cutoff = 4000
+resonance = 0.3
+filter_env = 0.35
+mod_decay = 0.5
+mod_sustain = 0.2
+menv_pos = 0.7
+amp_sustain = 0.9
+amp_release = 0.2
+lfo_rate = 5.5
+lfo_pitch = 0.12
+glide = 0.06

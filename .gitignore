@@ -1,0 +1,11 @@
+# Build output
+/build/
+/xowave
+build.log
+
+# Rendered audio / screenshots
+*.wav
+!/wavetables/*.wav
+
+# macOS
+.DS_Store
