@@ -110,6 +110,7 @@ static UiConfig makeUiConfig(const KeyValues& conf, const std::vector<Wavetable>
     ui.presetsDir = kvGet(conf, "presets.dir", "presets");
     ui.wavetablesDir = kvGet(conf, "wavetables.dir", "wavetables");
     ui.version = XO_VERSION;
+    ui.voices = static_cast<unsigned>(std::clamp(kvGetInt(conf, "synth.voices", 8), 1, 16));
     ui.statePath = kvGet(conf, "ui.state", "");
     ui.fontsDir = kvGet(conf, "ui.fonts", "/opt/xowave/fonts");
     ui.audioDevice = kvGet(conf, "audio.device", "default");
@@ -276,6 +277,7 @@ static int runLive(const KeyValues& conf, const std::vector<Wavetable>& tables, 
                  audio.period(), audio.bufferSize(), 1000.0 * audio.bufferSize() / audio.rate(), audio.formatName());
 
     auto synth = makeSynth(static_cast<float>(audio.rate()), conf, tables);
+    synth->setCpuGuard(kvGet(conf, "synth.cpu_guard", "on") != "off");
 
     // Pick up exactly where we left off: the last sound, including edits
     // that were never saved as a preset.
@@ -354,6 +356,12 @@ static int runLive(const KeyValues& conf, const std::vector<Wavetable>& tables, 
         bool clockWas = false;
         while (!saverQuit.load()) {
             std::this_thread::sleep_for(std::chrono::milliseconds(500));
+            static int limitLogged = -1;   // the CPU guard taking voices away / giving them back
+            int limit = gStatus.voiceLimit.load();
+            if (limit != limitLogged) {
+                if (limitLogged >= 0) std::fprintf(stderr, "xowave: CPU guard: polyphony %d\n", limit);
+                limitLogged = limit;
+            }
             bool clock = gStatus.extClock.load();
             static float bpmLogged = 0;   // log the clock's tempo when it changes
             if (clock && std::fabs(gStatus.bpmNow.load() - bpmLogged) >= 0.5f && clockWas) {

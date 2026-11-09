@@ -157,6 +157,7 @@ The repo is private, so each Pi uses its own **read-only deploy key** (`/etc/xow
 | No sound from jack | `xowave --list-devices`, then set `audio.device` (older images call the jack `CARD=ALSA`). Check the volume: `alsamixer` |
 | Clicks / "xruns" in log | `audio.period = 256` in `/etc/xowave.conf`, or lower `synth.voices` |
 | CPU headroom | `xowave -c /etc/xowave.conf --bench` (worst case: all voices, 4× unison on both oscs) |
+| A note drops out when playing very dense, heavy patches | That's the **CPU guard**: when a period gets close to its deadline it fades the oldest/quietest voice out instead of letting the audio break up, and gives voices back after 2 s of calm. SETTINGS → SYSTEM shows "CPU: MAX n" while it's limiting. `synth.cpu_guard = off` turns it off |
 | Keyboard not responding | `aconnect -l` should show XO-Wave connected; check `midi.channel` |
 
 ## Developing on the Mac
@@ -174,5 +175,21 @@ make test
 `--render` plays a chord through each preset and writes a WAV file. `make test` checks aliasing, stability at extreme settings and voice stealing. Use `--bench` to measure CPU.
 
 `./xowave -c xowave.conf --ui-snapshot DIR` renders every touchscreen page to PNG files, with no display needed.
+
+Stress tests (add `SAN=1` for the address + undefined-behaviour sanitizers; AddressSanitizer doesn't run on the Pi 3's kernel, use `-fsanitize=undefined` there):
+
+```bash
+make stress SECONDS=120
+```
+
+```bash
+make filefuzz SAN=1
+```
+
+```bash
+make netfuzz SAN=1
+```
+
+`stress` throws random MIDI storms, parameter changes (including out-of-range ones), presets, arpeggiator/chord/hold/sustain toggling and MIDI clock at the engine and checks the output stays finite and bounded, notes always end, and periods stay on time. `filefuzz` feeds hostile WAVs and preset/settings files; `netfuzz` hostile HTTP requests and random Studio-link packets.
 
 Code layout: `src/ui/` (touchscreen UI), `src/engine_link.h` (lock-free UI ↔ audio link), `src/synth.*` (voices and modulation), `src/wavetable.*` (band-limited mipmapped tables), `src/dsp.h` (filter and envelopes), `src/alsa_io.*` (audio and MIDI), `src/bt_output.*` (Bluetooth output), `install/` (Pi setup and services).

@@ -90,6 +90,7 @@ struct EngineStatus {
     std::atomic<float> lfo{0};
     std::atomic<float> livePos[2] = {{0}, {0}};  // modulated wavetable position (osc A/B)
     std::atomic<int> voices{0};
+    std::atomic<int> voiceLimit{16};       // the CPU guard's current polyphony
     std::atomic<int> preset{-1};
     std::atomic<uint32_t> midiEvents{0};
     std::atomic<uint32_t> xruns{0};

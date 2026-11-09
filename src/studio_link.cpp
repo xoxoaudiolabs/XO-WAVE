@@ -506,7 +506,9 @@ void StudioLink::received(const uint8_t* p, int len, bool dataPort) {
     }
     if (!dataPort) return;
     heard_ = nowSec();
-    decodeMidi(p, len, [this](const MidiMsg& m) { in_.push(m); });
+    MidiMsg msgs[128];
+    int count = decodeRtpMidi(p, len, msgs, 128);
+    for (int i = 0; i < count; ++i) in_.push(msgs[i]);
 }
 
 void StudioLink::pushMidiOut(const uint8_t* msg, int len) {
@@ -602,19 +604,9 @@ void StudioLink::receiveReturn() {
     ssize_t n;
     while ((n = ::recvfrom(ret_, buf, sizeof buf, MSG_DONTWAIT, reinterpret_cast<sockaddr*>(&from), &fl)) > 0) {
         if (state_.load() != Linked || from.sin_addr.s_addr != audioDest_.load()) continue;
-        if (n < 12 || (buf[0] & 0xC0) != 0x80) continue;
-        int head = 12 + 4 * (buf[0] & 0x0F);
-        if ((buf[0] & 0x10) && n >= head + 4) head += 4 + 4 * get16(buf + head + 2);   // header extension
-        int frames = (static_cast<int>(n) - head) / 4;
-        if (frames <= 0) continue;
         float l[512], r[512];
-        frames = std::min(frames, 512);
-        for (int i = 0; i < frames; ++i) {
-            const uint8_t* p = buf + head + 4 * i;
-            l[i] = static_cast<int16_t>((p[0] << 8) | p[1]) / 32768.0f;
-            r[i] = static_cast<int16_t>((p[2] << 8) | p[3]) / 32768.0f;
-        }
-        retRing_.push(l, r, static_cast<size_t>(frames));
+        int frames = parseRtpL16(buf, static_cast<int>(n), l, r, 512);
+        if (frames > 0) retRing_.push(l, r, static_cast<size_t>(frames));
         fl = sizeof from;
     }
 }
@@ -690,6 +682,31 @@ void StudioLink::sendAudio(const float* left, const float* right, int n) {
 }
 
 // ---------------------------------------------------------------------------
+
+int decodeRtpMidi(const uint8_t* p, int len, MidiMsg* out, int maxOut) {
+    int n = 0;
+    decodeMidi(p, len, [&](const MidiMsg& m) { if (n < maxOut) out[n++] = m; });
+    return n;
+}
+
+int parseRtpL16(const uint8_t* p, int len, float* left, float* right, int maxFrames) {
+    if (len < 12 || (p[0] & 0xC0) != 0x80) return 0;
+    int head = 12 + 4 * (p[0] & 0x0F);                                       // CSRCs
+    if (p[0] & 0x10) {                                                       // header extension
+        if (len < head + 4) return 0;
+        head += 4 + 4 * get16(p + head + 2);
+    }
+    if (p[0] & 0x20) len -= p[len - 1];                                      // padding
+    int frames = (len - head) / 4;
+    if (frames <= 0) return 0;
+    frames = std::min(frames, maxFrames);
+    for (int i = 0; i < frames; ++i) {
+        const uint8_t* s = p + head + 4 * i;
+        left[i] = static_cast<int16_t>((s[0] << 8) | s[1]) / 32768.0f;
+        right[i] = static_cast<int16_t>((s[2] << 8) | s[3]) / 32768.0f;
+    }
+    return frames;
+}
 
 void applyMidi(Synth& synth, const MidiMsg& m, int channel) {
     if (m.len >= 1) {   // the Studio's clock: tempo, start, stop

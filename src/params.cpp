@@ -110,6 +110,12 @@ static float maxFor(int id, int numTables) {
 
 float paramClamp(int id, float v, int numTables) {
     const ParamInfo& p = kParams[id];
+    if (!isFiniteBits(v)) {   // inf -> its end of the range, nan -> the default
+        uint32_t u;
+        std::memcpy(&u, &v, sizeof u);
+        const bool isNan = (u & 0x007fffffu) != 0;
+        v = isNan ? p.def : ((u & 0x80000000u) ? p.min : maxFor(id, numTables));
+    }
     v = std::clamp(v, p.min, maxFor(id, numTables));
     if (p.integer) v = std::round(v);
     return v;
@@ -117,6 +123,7 @@ float paramClamp(int id, float v, int numTables) {
 
 float paramFromNormalized(int id, float n, int numTables) {
     const ParamInfo& p = kParams[id];
+    if (!isFiniteBits(n)) n = paramToNormalized(id, p.def, numTables);
     n = std::clamp(n, 0.0f, 1.0f);
     float hi = maxFor(id, numTables);
     float v = (p.curve == Curve::Exp) ? p.min * std::pow(hi / p.min, n) : p.min + (hi - p.min) * n;

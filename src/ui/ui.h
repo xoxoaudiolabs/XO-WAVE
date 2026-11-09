@@ -22,6 +22,7 @@ struct UiConfig {
     std::string audioDevice;   // shown on SYSTEM page
     std::string btDevice;
     unsigned rate = 48000, period = 128, periods = 3;
+    unsigned voices = 8;
 
     std::string fontsDir;      // Anton + IBM Plex Mono .ttf files
     std::string version;       // shown on SETTINGS > SYSTEM

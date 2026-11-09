@@ -1,6 +1,7 @@
 #include "synth.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 
 namespace xo {
@@ -9,6 +10,7 @@ Synth::Synth(float sampleRate, int voices, const std::vector<Wavetable>& tables)
     : sr_(sampleRate), numVoices_(std::clamp(voices, 1, kMaxVoices)), tables_(tables) {
     clearCcMap();
     fx_.init(sampleRate);
+    voiceLimit_ = numVoices_;
     for (int i = 0; i < P_COUNT; ++i) target_[i] = paramClamp(i, kParams[i].def, numTables());
     smooth_ = target_;
     for (int u = 0; u < kMaxUnison; ++u) {
@@ -40,6 +42,52 @@ void Synth::setStatus(EngineStatus* status) {
 void Synth::loadPreset(const float* values, int index) {
     for (int i = 0; i < P_COUNT; ++i) setParam(i, values[i]);
     if (status_ && index >= 0) status_->preset.store(index, std::memory_order_relaxed);
+}
+
+std::string Synth::debugState() const {
+    std::string out;
+    char b[160];
+    for (int i = 0; i < numVoices_; ++i) {
+        const Voice& v = voices_[i];
+        if (v.amp.idle()) continue;
+        std::snprintf(b, sizeof b, "voice %d: note %d gate %d held %d stage %d level %.3f\n", i, v.note, v.gate, v.held,
+                      static_cast<int>(v.amp.stage), v.amp.v);
+        out += b;
+    }
+    std::snprintf(b, sizeof b, "arp mode %d hold %d n %d current %d gateOff %.3f beats %.3f next %.3f sustain %d keysDown %d\n",
+                  static_cast<int>(target_[P_ARP_MODE]), static_cast<int>(target_[P_ARP_HOLD]), arpN_, arpCurrent_, gateOff_,
+                  beats_, nextStep_, sustain_, keysDown_);
+    out += b;
+    for (int k = 0; k < 128; ++k) if (keyCount_[k]) { std::snprintf(b, sizeof b, "key %d count %d\n", k, keyCount_[k]); out += b; }
+    return out;
+}
+
+int Synth::soundingVoices() const {
+    int n = 0;
+    for (int i = 0; i < numVoices_; ++i) n += (!voices_[i].amp.idle() && !voices_[i].fading) ? 1 : 0;
+    return n;
+}
+
+// Fade out voices over the limit: released ones (quietest) first, then the oldest.
+void Synth::shedVoices() {
+    while (soundingVoices() > voiceLimit_) {
+        Voice* victim = nullptr;
+        float best = 2.0f;
+        for (int i = 0; i < numVoices_; ++i) {
+            Voice& v = voices_[i];
+            if (!v.amp.idle() && !v.fading && !v.gate && v.amp.v < best) { best = v.amp.v; victim = &v; }
+        }
+        for (int i = 0; i < numVoices_ && !victim; ++i) {
+            Voice& v = voices_[i];
+            if (!v.amp.idle() && !v.fading) {
+                victim = &v;
+                for (int j = i + 1; j < numVoices_; ++j)
+                    if (!voices_[j].amp.idle() && !voices_[j].fading && voices_[j].age < victim->age) victim = &voices_[j];
+            }
+        }
+        if (!victim) break;
+        victim->fading = true;
+    }
 }
 
 int Synth::activeVoices() const {
@@ -89,20 +137,24 @@ void Synth::voiceOn(int note, int velocity) {
     bool fresh = false;
     for (int i = 0; i < numVoices_ && !pick; ++i)  // same note already sounding
         if (!voices_[i].amp.idle() && voices_[i].note == note) pick = &voices_[i];
-    for (int i = 0; i < numVoices_ && !pick; ++i)  // free voice
-        if (voices_[i].amp.idle()) { pick = &voices_[i]; fresh = true; }
+    if (soundingVoices() < voiceLimit_)  // a free voice (within the CPU guard's limit)
+        for (int i = 0; i < numVoices_ && !pick; ++i)
+            if (voices_[i].amp.idle()) { pick = &voices_[i]; fresh = true; }
     if (!pick) {  // quietest released voice
         float best = 2.0f;
         for (int i = 0; i < numVoices_; ++i) {
             Voice& v = voices_[i];
-            if (!v.gate && v.amp.v < best) { best = v.amp.v; pick = &v; }
+            if (!v.amp.idle() && !v.gate && v.amp.v < best) { best = v.amp.v; pick = &v; }
         }
     }
-    if (!pick) {  // oldest
-        pick = &voices_[0];
-        for (int i = 1; i < numVoices_; ++i)
-            if (voices_[i].age < pick->age) pick = &voices_[i];
+    if (!pick) {  // oldest sounding voice
+        for (int i = 0; i < numVoices_; ++i) {
+            Voice& v = voices_[i];
+            if (!v.amp.idle() && (!pick || v.age < pick->age)) pick = &v;
+        }
     }
+    if (!pick) { pick = &voices_[0]; fresh = true; }
+    if (pick->fading) { pick->fading = false; pick->fade = 1.0f; }
     startVoice(*pick, note, velocity, fresh);
 }
 
@@ -147,7 +199,16 @@ void Synth::noteOn(int note, int velocity) {
     const int chord = std::clamp(static_cast<int>(target_[P_CHORD]), 0, 8);
     const bool arp = target_[P_ARP_MODE] >= 0.5f;
     if (arp && target_[P_ARP_HOLD] >= 0.5f && keysDown_ == 0) arpN_ = 0;  // held notes: a new chord replaces them
-    if (keyCount_[note] == 0) ++keysDown_;
+    if (keyCount_[note] == 0) {
+        ++keysDown_;
+    } else {
+        // Pressed again without a release (a repeated note-on, or a MIDI route echoing
+        // it back): let go of what it started before, which may be a different chord.
+        for (int k = 0; k < keyCount_[note]; ++k) {
+            voiceOff(keyNotes_[note][k]);
+            if (arp) arpRemove(keyNotes_[note][k]);
+        }
+    }
     keyCount_[note] = 0;
     keyVel_[note] = static_cast<uint8_t>(velocity);
     for (int k = 0; k < 4 && kChordNotes[chord][k] >= 0; ++k) {
@@ -395,6 +456,7 @@ void Synth::controlChange(int cc, int value) {
 // Audio
 
 void Synth::render(float* left, float* right, int n) {
+    const auto t0 = cpuGuard_ ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
     livePos_[0] = livePos_[1] = -1.0f;
     int off = 0;
     while (off < n) {
@@ -402,12 +464,26 @@ void Synth::render(float* left, float* right, int n) {
         renderBlock(left + off, right + off, m);
         off += m;
     }
+    if (cpuGuard_ && n > 0) {
+        const double used = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+        const double load = used / (static_cast<double>(n) / sr_);
+        if (load > 0.85) {                      // too close to the deadline: shed a voice
+            voiceLimit_ = std::max(2, std::min(voiceLimit_, soundingVoices()) - 1);
+            shedVoices();
+            calmPeriods_ = 0;
+        } else if (load < 0.55 && voiceLimit_ < numVoices_) {
+            if (++calmPeriods_ > static_cast<int>(2.0 * sr_ / n)) { ++voiceLimit_; calmPeriods_ = 0; }   // 2 s calm
+        } else {
+            calmPeriods_ = 0;
+        }
+    }
     if (status_) {
         float pl = 0, pr = 0;
         for (int i = 0; i < n; ++i) { pl = std::max(pl, std::fabs(left[i])); pr = std::max(pr, std::fabs(right[i])); }
         if (pl > status_->peakL.load(std::memory_order_relaxed)) status_->peakL.store(pl, std::memory_order_relaxed);
         if (pr > status_->peakR.load(std::memory_order_relaxed)) status_->peakR.store(pr, std::memory_order_relaxed);
         status_->voices.store(activeVoices(), std::memory_order_relaxed);
+        status_->voiceLimit.store(voiceLimit_, std::memory_order_relaxed);
         status_->lfo.store(lfoValue_, std::memory_order_relaxed);
         status_->livePos[0].store(livePos_[0] >= 0 ? livePos_[0] : target_[P_A_POS], std::memory_order_relaxed);
         status_->bpmNow.store(bpm_, std::memory_order_relaxed);
@@ -608,6 +684,11 @@ void Synth::renderVoice(Voice& v, float* outL, float* outR, int n) {
         else if (mode == 5) { l = v.combL.process(l, combDelay, combFb); r = v.combR.process(r, combDelay, combFb); }
         else { l = v.filtL.process(l, c, svfMode); r = v.filtR.process(r, c, svfMode); }
         float a = v.amp.next(ampCoefs_) * velA;
+        if (v.fading) {   // shed by the CPU guard: 2 ms fade
+            v.fade -= 1.0f / 96.0f;
+            if (v.fade <= 0.0f) { v.fade = 0.0f; v.amp.kill(); }
+            a *= v.fade;
+        }
         outL[i] += l * a;
         outR[i] += r * a;
     }
@@ -616,6 +697,8 @@ void Synth::renderVoice(Voice& v, float* outL, float* outR, int n) {
         v.note = -1;
         v.gate = v.held = false;
         v.mod.kill();
+        v.fading = false;
+        v.fade = 1.0f;
     }
 }
 

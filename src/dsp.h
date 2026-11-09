@@ -165,6 +165,7 @@ struct Comb {
         if (pos < 0) pos += kLen;
         int i0 = static_cast<int>(pos);
         float fr = pos - static_cast<float>(i0);
+        if (i0 >= kLen) i0 -= kLen;   // (w - tiny) + kLen can round to exactly kLen
         int i1 = i0 + 1 >= kLen ? 0 : i0 + 1;
         float d = buf[i0] + fr * (buf[i1] - buf[i0]);
         float y = x + feedback * d;

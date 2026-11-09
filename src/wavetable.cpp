@@ -1,5 +1,7 @@
 #include "wavetable.h"
 
+#include "params.h"   // isFiniteBits
+
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -63,8 +65,9 @@ void Wavetable::setFrameSpectrum(int frame, const std::vector<cd>& spectrum) {
 
         if (m == 0) {  // normalise every mip by the full-bandwidth peak
             float peak = 0.0f;
-            for (int i = 0; i < kSize; ++i) peak = std::max(peak, std::fabs(dst[i]));
-            gain = peak > 1e-9f ? 1.0f / peak : 0.0f;
+            bool ok = true;
+            for (int i = 0; i < kSize; ++i) { ok = ok && isFiniteBits(dst[i]); peak = std::max(peak, std::fabs(dst[i])); }
+            gain = ok && isFiniteBits(peak) && peak > 1e-9f ? 1.0f / peak : 0.0f;   // a bad frame plays silence
         }
         for (int i = 0; i < kSize; ++i) dst[i] *= gain;
         dst[kSize] = dst[0];
@@ -221,8 +224,10 @@ static uint32_t rd32(const uint8_t* p) { return p[0] | (p[1] << 8) | (p[2] << 16
 static uint16_t rd16(const uint8_t* p) { return static_cast<uint16_t>(p[0] | (p[1] << 8)); }
 
 bool loadWavetableWav(const std::string& path, Wavetable& out, std::string& err) {
-    std::ifstream f(path, std::ios::binary);
+    std::ifstream f(path, std::ios::binary | std::ios::ate);
     if (!f) { err = "cannot open"; return false; }
+    if (f.tellg() > static_cast<std::streamoff>(32 * 1024 * 1024)) { err = "file over 32 MB"; return false; }
+    f.seekg(0);
     std::vector<uint8_t> d((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
     if (d.size() < 12 || std::memcmp(d.data(), "RIFF", 4) || std::memcmp(d.data() + 8, "WAVE", 4)) {
         err = "not a RIFF/WAVE file";
@@ -274,7 +279,7 @@ bool loadWavetableWav(const std::string& path, Wavetable& out, std::string& err)
         else if (bits == 16) v = static_cast<int16_t>(rd16(p)) / 32768.0f;
         else if (bits == 24) v = static_cast<int32_t>((p[0] << 8) | (p[1] << 16) | (uint32_t(p[2]) << 24)) / 2147483648.0f;
         else v = static_cast<int32_t>(rd32(p)) / 2147483648.0f;
-        s[i] = v;
+        s[i] = isFiniteBits(v) ? std::clamp(v, -16.0f, 16.0f) : 0.0f;   // corrupt float files
     }
     if (total == 0) { err = "no samples"; return false; }
 

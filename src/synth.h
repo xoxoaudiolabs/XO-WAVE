@@ -58,6 +58,11 @@ public:
     void setStatus(EngineStatus* status);
     int numTables() const { return static_cast<int>(tables_.size()); }
     int activeVoices() const;
+    // CPU guard: when a period takes too long to render, play with fewer voices
+    // (fading the oldest/quietest out) rather than drop out; give them back when calm.
+    void setCpuGuard(bool on) { cpuGuard_ = on; }
+    int voiceLimit() const { return voiceLimit_; }
+    std::string debugState() const;   // voices + arp + held keys (tests)
 
     // Renders n frames into separate left/right buffers (overwrites).
     void render(float* left, float* right, int n);
@@ -77,6 +82,8 @@ private:
         Comb combL, combR;
         float subPhase = 0;
         float rnd = 0;  // per-note random (mod matrix source)
+        bool fading = false;   // being shed by the CPU guard
+        float fade = 1.0f;
     };
 
     void renderBlock(float* left, float* right, int n);
@@ -87,6 +94,8 @@ private:
     void voiceOn(int note, int velocity);
     void voiceOff(int note);
     void advanceClock(int n);
+    void shedVoices();
+    int soundingVoices() const;   // active and not fading out
     void runArp();
     bool pickArpNote(int mode, int& note, int& vel);
     void arpAdd(int note, int vel);
@@ -116,6 +125,9 @@ private:
     float glideCoef_ = 0;
     float livePos_[2] = {-1, -1};
     float masterSmooth_ = 0.64f;
+    bool cpuGuard_ = false;
+    int voiceLimit_ = 16;
+    int calmPeriods_ = 0;
     FxBus fx_;
     float bpm_ = 120.0f;   // tempo for synced effects (external MIDI clock or the internal tempo)
 

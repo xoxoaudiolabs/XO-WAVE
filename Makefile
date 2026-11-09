@@ -67,3 +67,30 @@ test: build/engine_test
 	./build/engine_test
 
 .PHONY: test
+
+# Stress test (make stress, or make stress SAN=1 for address/undefined sanitizers)
+SAN_FLAGS := -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer
+STRESS_FLAGS := $(if $(SAN),$(SAN_FLAGS),$(filter-out -MMD -MP,$(CXXFLAGS)))   # (as the real app)
+build/stress_test: tests/stress_test.cpp src/synth.cpp src/fx.cpp src/wavetable.cpp src/params.cpp | build
+	$(CXX) -std=c++17 $(STRESS_FLAGS) -o $@ $^
+
+stress: build/stress_test
+	./build/stress_test $(SECONDS)
+
+.PHONY: stress
+
+build/file_fuzz: tests/file_fuzz.cpp src/config.cpp src/synth.cpp src/fx.cpp src/wavetable.cpp src/params.cpp | build
+	$(CXX) -std=c++17 $(STRESS_FLAGS) -o $@ $^
+
+filefuzz: build/file_fuzz
+	./build/file_fuzz
+
+.PHONY: filefuzz
+
+build/net_fuzz: tests/net_fuzz.cpp src/web.cpp src/studio_link.cpp src/synth.cpp src/fx.cpp src/wavetable.cpp src/params.cpp | build
+	$(CXX) -std=c++17 $(STRESS_FLAGS) -o $@ $^
+
+netfuzz: build/net_fuzz
+	./build/net_fuzz
+
+.PHONY: netfuzz

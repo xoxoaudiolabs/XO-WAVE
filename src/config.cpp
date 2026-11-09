@@ -157,15 +157,31 @@ std::vector<Preset> loadPresetDir(const std::string& dir, const std::vector<Wave
 }
 
 void loadWavetableDir(const std::string& dir, std::vector<Wavetable>& tables) {
+    // Each frame costs ~90 KB once band-limited; keep user tables within ~150 MB of the
+    // Pi's RAM and the wavetable parameter's range.
+    constexpr int kFrameBudget = 1700, kMaxTables = 250;
+    int frames = 0;
+    for (const auto& t : tables) frames += t.numFrames();
     for (const std::string& path : listDir(dir, ".wav")) {
+        if (static_cast<int>(tables.size()) >= kMaxTables) {
+            std::fprintf(stderr, "xowave: skipping %s: too many wavetables (%d)\n", path.c_str(), kMaxTables);
+            continue;
+        }
         Wavetable w;
         std::string err;
-        if (loadWavetableWav(path, w, err)) {
+        if (loadWavetableWav(path, w, err) && frames + w.numFrames() > kFrameBudget + 320) {
+            std::fprintf(stderr, "xowave: skipping %s: wavetable memory full\n", path.c_str());
+            continue;
+        }
+        if (!err.empty() || w.numFrames() == 0) {
+            std::fprintf(stderr, "xowave: skipping %s: %s\n", path.c_str(), err.empty() ? "no frames" : err.c_str());
+            continue;
+        }
+        frames += w.numFrames();
+        {
             std::fprintf(stderr, "xowave: wavetable %d: %s (%d frames)\n", static_cast<int>(tables.size()),
                          w.name.c_str(), w.numFrames());
             tables.push_back(std::move(w));
-        } else {
-            std::fprintf(stderr, "xowave: skipping %s: %s\n", path.c_str(), err.c_str());
         }
     }
 }

@@ -126,6 +126,15 @@ tabs();poll();
 </script></body></html>
 )XOHTML";
 
+// A query number, or def when it's missing, junk, nan or infinite.
+float num(const std::string& text, float def) {
+    if (text.empty()) return def;
+    char* end = nullptr;
+    float v = std::strtof(text.c_str(), &end);
+    if (end == text.c_str() || !isFiniteBits(v)) return def;
+    return v;
+}
+
 std::string jsonEscape(const std::string& in) {
     std::string out;
     for (char c : in) {
@@ -205,7 +214,7 @@ void WebServer::run() {
         if (::poll(&p, 1, 200) <= 0) continue;
         int fd = ::accept(listen_, nullptr, nullptr);
         if (fd < 0) continue;
-        timeval tv{2, 0};
+        timeval tv{0, 300000};   // a client that connects and sends nothing can't hold the server up
         setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
         setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv);
         handle(fd);
@@ -260,8 +269,9 @@ void WebServer::handle(int fd) {
         if (id < 0) { reply(fd, 400, "application/json", "{\"error\":\"unknown parameter\"}"); return; }
         const int numTables = cfg_.tables ? static_cast<int>(cfg_.tables->size()) : 0;
         std::string nv = queryValue(query, "n"), vv = queryValue(query, "v");
-        float v = !nv.empty() ? paramFromNormalized(id, static_cast<float>(std::atof(nv.c_str())), numTables)
-                              : paramClamp(id, static_cast<float>(std::atof(vv.c_str())), numTables);
+        if (nv.empty() && vv.empty()) { reply(fd, 400, "application/json", "{\"error\":\"n or v needed\"}"); return; }
+        float v = !nv.empty() ? paramFromNormalized(id, num(nv, -1), numTables)
+                              : paramClamp(id, num(vv, kParams[id].def), numTables);
         push(CmdType::SetParam, id, v);
         reply(fd, 200, "application/json", "{\"ok\":true}");
         return;
@@ -273,12 +283,12 @@ void WebServer::handle(int fd) {
         return;
     }
     if (path == "/api/master" && cfg_.status) {
-        cfg_.status->master.store(std::clamp(static_cast<float>(std::atof(queryValue(query, "v").c_str())), 0.0f, 1.0f));
+        cfg_.status->master.store(std::clamp(num(queryValue(query, "v"), cfg_.status->master.load()), 0.0f, 1.0f));
         reply(fd, 200, "application/json", "{\"ok\":true}");
         return;
     }
     if (path == "/api/tempo" && cfg_.status) {
-        cfg_.status->tempo.store(std::clamp(static_cast<float>(std::atof(queryValue(query, "v").c_str())), 30.0f, 300.0f));
+        cfg_.status->tempo.store(std::clamp(num(queryValue(query, "v"), cfg_.status->tempo.load()), 30.0f, 300.0f));
         reply(fd, 200, "application/json", "{\"ok\":true}");
         return;
     }

@@ -114,6 +114,12 @@ private:
     SpscQueue<MidiMsg, 512> out_;   // local playing -> Studio
 };
 
+// Packet parsers (exposed for the fuzz tests).
+// RTP-MIDI -> up to maxOut messages; returns how many.
+int decodeRtpMidi(const uint8_t* p, int len, MidiMsg* out, int maxOut);
+// RTP L16 stereo (S16BE) -> up to maxFrames frames; returns how many (0 for anything else).
+int parseRtpL16(const uint8_t* p, int len, float* left, float* right, int maxFrames);
+
 // Plays one MIDI message on the synth (notes, CC, pitch bend, program).
 // channel: 0 = omni, 1..16. System messages (clock etc.) are ignored.
 class Synth;

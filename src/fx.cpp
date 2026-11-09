@@ -32,6 +32,7 @@ static inline float readFrac(const std::vector<float>& b, int w, float delay) {
     while (pos < 0) pos += static_cast<float>(size);
     int i0 = static_cast<int>(pos);
     float fr = pos - static_cast<float>(i0);
+    if (i0 >= size) i0 -= size;   // (w - tiny) + size can round to exactly size
     int i1 = i0 + 1 >= size ? 0 : i0 + 1;
     return b[static_cast<size_t>(i0)] + fr * (b[static_cast<size_t>(i1)] - b[static_cast<size_t>(i0)]);
 }

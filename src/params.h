@@ -1,6 +1,8 @@
 // Synth parameter definitions. Every parameter has a text name used by
 // presets and by the MIDI CC map in the config file.
 #pragma once
+#include <cstdint>
+#include <cstring>
 #include <string>
 
 namespace xo {
@@ -47,6 +49,13 @@ struct ParamInfo {
 };
 
 extern const ParamInfo kParams[P_COUNT];
+
+// True unless x is NaN or infinite. A bit test, so -ffast-math can't remove it.
+inline bool isFiniteBits(float x) {
+    uint32_t u;
+    std::memcpy(&u, &x, sizeof u);
+    return (u & 0x7f800000u) != 0x7f800000u;
+}
 
 int findParam(const std::string& name);                // -1 if unknown
 float paramFromNormalized(int id, float n, int numTables);

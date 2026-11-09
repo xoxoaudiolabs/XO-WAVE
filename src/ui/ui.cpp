@@ -91,6 +91,7 @@ struct State {
     uint32_t pendingUntil[P_COUNT] = {};  // ignore engine echo briefly after UI edits
     uint32_t lastSerial = 0xffffffffu;
     uint32_t lastSerialXy = 0;
+    uint32_t flashUntil = 0;
     int currentPreset = -1;
 
     std::vector<std::unique_ptr<Knob>> knobs;
@@ -1354,6 +1355,10 @@ std::string slugify(const std::string& name) {
 void flashInfo(const char* msg) {
     if (S->presetInfo) lv_label_set_text(S->presetInfo, msg);
     else std::fprintf(stderr, "xowave: %s\n", msg);
+    if (S->presetLabel) {   // also show it for 2 s where the preset name is
+        lv_label_set_text(S->presetLabel, msg);
+        S->flashUntil = tickMs() + 2000;
+    }
 }
 
 bool savePreset(const std::string& name, int idx) {
@@ -1366,6 +1371,10 @@ bool savePreset(const std::string& name, int idx) {
         std::snprintf(prefix, sizeof prefix, "%02d-", bank.count() + 1);
         path = S->cfg.presetsDir + "/" + prefix + slugify(name) + ".xowave";
         idx = bank.count();
+        if (idx >= PresetBank::kMax) {
+            flashInfo("PRESETS FULL (128): DELETE ONE OR SAVE OVER ONE.");
+            return false;
+        }
     }
     if (!savePresetFile(path, name, S->values, *S->cfg.tables)) {
         flashInfo("Save failed:\ncan't write presets folder");
@@ -1805,6 +1814,7 @@ bool importPreset(const State::UsbFile& f, std::string& err) {
         std::snprintf(prefix, sizeof prefix, "%02d-", bank.count() + 1);
         path = S->cfg.presetsDir + "/" + prefix + slugify(p.name) + ".xowave";
         idx = bank.count();
+        if (idx >= PresetBank::kMax) { err = "presets full (128)"; return false; }
     }
     if (!savePresetFile(path, p.name, p.values.data(), *S->cfg.tables)) { err = "can't write presets"; return false; }
     bank.write(idx, p.name.c_str(), path.c_str(), p.values.data());
@@ -1994,17 +2004,20 @@ void updateSystemInfo() {
     std::string temp = readFirstLine("/sys/class/thermal/thermal_zone0/temp");
     char tbuf[16] = "--";
     if (!temp.empty()) std::snprintf(tbuf, sizeof tbuf, "%.0fC", std::atof(temp.c_str()) / 1000.0);
+    char limitText[40] = "";
+    if (st && st->voiceLimit.load() < static_cast<int>(S->cfg.voices))
+        std::snprintf(limitText, sizeof limitText, "  (CPU: MAX %d)", st->voiceLimit.load());
     char buf[512];
     std::snprintf(buf, sizeof buf,
                   "%u HZ / %u FRAMES\n"
                   "%.0f%% AUDIO  /  %s\n"
                   "%u\n"
                   "%u EVENTS\n"
-                  "%d PLAYING\n"
+                  "%d PLAYING%s\n"
                   "%s\n"
                   "%s",
                   S->cfg.rate, S->cfg.period, st ? st->cpu.load() * 100.0 : 0.0, tbuf, st ? st->xruns.load() : 0u,
-                  st ? st->midiEvents.load() : 0u, st ? st->voices.load() : 0, ipAddress().c_str(), S->cfg.version.c_str());
+                  st ? st->midiEvents.load() : 0u, st ? st->voices.load() : 0, limitText, ipAddress().c_str(), S->cfg.version.c_str());
     lv_label_set_text(S->sysInfo, buf);
     if (S->btSpeakerLabel) {
         std::string bt = S->cfg.btDevice.empty() ? "NONE PAIRED"
@@ -2939,7 +2952,8 @@ void syncFromEngine() {
     if (preset != S->currentPreset && preset >= 0) S->currentPreset = preset;
     int n = S->cfg.bank ? S->cfg.bank->count() : 0;
     const char* name = (S->currentPreset >= 0 && S->currentPreset < n) ? S->cfg.bank->name(S->currentPreset) : "-";
-    if (std::strcmp(lv_label_get_text(S->presetLabel), name) != 0) lv_label_set_text(S->presetLabel, name);
+    if (static_cast<int32_t>(now - S->flashUntil) >= 0 && std::strcmp(lv_label_get_text(S->presetLabel), name) != 0)
+        lv_label_set_text(S->presetLabel, name);
     if (S->listCount != n || S->listCurrent != S->currentPreset) rebuildPresetList();
 
     float pl = st->peakL.exchange(0.0f), pr = st->peakR.exchange(0.0f);
