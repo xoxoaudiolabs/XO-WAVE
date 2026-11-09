@@ -42,6 +42,9 @@ build/ui/%.o: src/ui/%.cpp | build
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) $(LVGL_FLAGS) -c -o $@ $<
 
+# main.cpp bakes in VERSION, so rebuild it when VERSION changes
+build/main.o: VERSION
+
 build/%.o: src/%.cpp | build
 	$(CXX) $(CXXFLAGS) -c -o $@ $<
 
