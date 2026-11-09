@@ -87,8 +87,8 @@ Tabs along the bottom:
 | **ENV** | Amp and mod envelopes with shape previews |
 | **MOD** | Four views: **LFO 1** (shape, rate free or synced, destinations), **LFO 2**, **MATRIX** (4 slots: LFO 1/2, mod env, amp env, velocity, mod wheel, aftertouch, key, per-note random → osc A/B position, cutoff, resonance, pitch, osc A/B level, drive, with amounts ±100%) and **PERFORM**: mod-env → position, velocity, glide, bend range, stereo spread, volume |
 | **FX** | Delay (free or synced to the tempo: 1/32 to 4 bars, triplets and dotted; feedback, tone, ping-pong), chorus, reverb (size, damping) and a bus drive before them |
-| **PLAY** | Arpeggiator (up, down, up/down, random, as played; rate, octaves, gate, hold), chord memory (maj, min, 7, maj7, min7, sus4, 5th, oct), tempo, and a two-octave keyboard with octave shift, latch and all notes off |
-| **PRESETS** | Load, save, save as (on-screen keyboard), delete |
+| **PLAY** | **XY PAD** (full screen: drag one finger to play two parameters at once; pick X and Y from 20, remembered), arpeggiator (up, down, up/down, random, as played; rate, octaves, gate, hold), chord memory (maj, min, 7, maj7, min7, sus4, 5th, oct), tempo, and a two-octave keyboard with octave shift, latch and all notes off |
+| **PRESETS** | Load, save, save as (on-screen keyboard), delete, USB import/backup, **UNDO** (each settled edit is a step; 40 deep), **COMPARE** (flip between your edits and the saved preset), favourites (tap + on a preset; FAVOURITES shows only those) |
 | **SETTINGS** | MIDI (channel, MIDI learn, connected inputs) · Bluetooth (scan & pair, forget, latency) · Audio (buffer, polyphony) · Display (touch calibration, knob speed) · System (status, restart, reboot, shut down) |
 
 Knobs: touch a knob and drag **up or right** to turn it up. The top bar shows the preset (◀ ▶ to step), MIDI activity, Bluetooth status, voice count and output level.

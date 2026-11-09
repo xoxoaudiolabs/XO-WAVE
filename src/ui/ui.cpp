@@ -10,6 +10,7 @@
 #include "ui.h"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -89,6 +90,7 @@ struct State {
     float values[P_COUNT] = {};
     uint32_t pendingUntil[P_COUNT] = {};  // ignore engine echo briefly after UI edits
     uint32_t lastSerial = 0xffffffffu;
+    uint32_t lastSerialXy = 0;
     int currentPreset = -1;
 
     std::vector<std::unique_ptr<Knob>> knobs;
@@ -167,6 +169,26 @@ struct State {
     lv_obj_t* usbStatus = nullptr;
     lv_obj_t* usbRestart = nullptr;
     int usbImportedTables = 0;
+
+    // Undo / compare
+    std::vector<std::array<float, P_COUNT>> undo;
+    std::array<float, P_COUNT> stable{};
+    bool stableSet = false;
+    uint32_t lastChange = 0;
+    bool comparing = false, applying = false;
+    std::array<float, P_COUNT> stash{};
+    lv_obj_t* undoBtn = nullptr;
+    lv_obj_t* compareBtn = nullptr;
+
+    // Favourites
+    bool favOnly = false;
+    lv_obj_t* favBtn = nullptr;
+
+    // XY pad
+    lv_obj_t* xyPad = nullptr;
+    lv_obj_t* xyDot = nullptr;
+    lv_obj_t* xyName[2] = {};
+    int xyParam[2] = {P_A_POS, P_CUTOFF};
 
     // KEYS
     int octave = 3;
@@ -261,18 +283,29 @@ void markState(const std::string& key, const std::string& value);
 void openVolume(lv_event_t*);
 void restartEvent(lv_event_t*);
 void modalCancel(lv_event_t*);
+void openXy(lv_event_t*);
+bool isFav(const char* name);
+void favToggle(lv_event_t*);
+
+void endCompare();
 
 void setParamUi(int id, float v) {
     v = paramClamp(id, v, S->numTables);
     if (v == S->values[id]) return;
+    if (S->comparing && !S->applying) endCompare();   // editing the saved version now
+    S->lastChange = tickMs();
     S->values[id] = v;
     S->pendingUntil[id] = tickMs() + 250;
     send(CmdType::SetParam, id, v);
     refreshViews(id);
 }
 
+void pushUndo();
+
 void loadPresetUi(int idx) {
     if (!S->cfg.bank || idx < 0 || idx >= S->cfg.bank->count()) return;
+    pushUndo();
+    S->comparing = false;
     send(CmdType::Program, idx, 0);
     // Show the new values right away instead of waiting for the engine echo.
     float v[P_COUNT];
@@ -338,6 +371,9 @@ lv_obj_t* button(lv_obj_t* parent, const char* text, int w, int h, lv_event_cb_t
     lv_obj_set_style_bg_color(b, C(kText), LV_STATE_CHECKED);
     lv_obj_set_style_text_color(b, C(kBg), LV_STATE_CHECKED);
     lv_obj_set_style_shadow_width(b, 0, 0);
+    lv_obj_set_style_border_color(b, C(kLine2), LV_STATE_DISABLED);
+    lv_obj_set_style_text_color(b, C(kLine2), LV_STATE_DISABLED);
+    lv_obj_set_style_bg_color(b, C(kBg), LV_STATE_DISABLED);
     lv_obj_set_style_radius(b, 0, 0);
     lv_obj_set_style_pad_all(b, 2, 0);
     lv_obj_t* l = lv_label_create(b);
@@ -1176,7 +1212,14 @@ void buildKeys(lv_obj_t* tab) {
     knob(knobs, P_ARP_OCT, "OCTAVES");
     knob(knobs, P_ARP_GATE, "GATE");
     knob(knobs, P_CHORD, "CHORD");
-    S->arpHoldBtn = button(knobs, "ARP HOLD", 100, 34, arpHoldEvent);
+    lv_obj_t* col = lv_obj_create(knobs);
+    lv_obj_remove_style_all(col);
+    lv_obj_set_size(col, 104, 72);
+    lv_obj_set_flex_flow(col, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(col, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_remove_flag(col, LV_OBJ_FLAG_SCROLLABLE);
+    S->arpHoldBtn = button(col, "ARP HOLD", 100, 32, arpHoldEvent);
+    button(col, "XY PAD", 100, 32, openXy);
 
     lv_obj_t* bar = row(tab, 472, 28);
     button(bar, LV_SYMBOL_MINUS " OCT", 80, 26, octaveEvent, reinterpret_cast<void*>(static_cast<intptr_t>(-1)));
@@ -1251,10 +1294,24 @@ void rebuildPresetList() {
     if (!S->presetList || !S->cfg.bank) return;
     PresetBank& bank = *S->cfg.bank;
     lv_obj_clean(S->presetList);
+    lv_obj_t* currentBtn = nullptr;
     for (int i = 0; i < bank.count(); ++i) {
+        const bool fav = isFav(bank.name(i));
+        if (S->favOnly && !fav && i != S->currentPreset) continue;
         char txt[64];
         std::snprintf(txt, sizeof txt, "%02d  %s", i, bank.name(i));
         lv_obj_t* b = lv_list_add_button(S->presetList, nullptr, txt);
+        lv_obj_t* star = lv_button_create(b);   // tap the star to favourite
+        lv_obj_remove_style_all(star);
+        lv_obj_set_size(star, 34, 30);
+        lv_obj_add_flag(star, LV_OBJ_FLAG_IGNORE_LAYOUT);
+        lv_obj_align(star, LV_ALIGN_RIGHT_MID, 4, 0);
+        lv_obj_t* sl = label(star, fav ? "\xE2\x98\x85" : "\xE2\x98\x86", fMed, fav ? kSignal : kLine2);
+        lv_obj_set_style_text_font(sl, &lv_font_montserrat_16, 0);
+        lv_label_set_text(sl, fav ? LV_SYMBOL_OK : LV_SYMBOL_PLUS);
+        lv_obj_center(sl);
+        lv_obj_add_event_cb(star, favToggle, LV_EVENT_CLICKED, reinterpret_cast<void*>(static_cast<intptr_t>(i)));
+        if (i == S->currentPreset) currentBtn = b;
         lv_obj_set_height(b, 38);
         lv_obj_set_style_bg_color(b, C(kBg), 0);
         lv_obj_set_style_radius(b, 0, 0);
@@ -1268,10 +1325,7 @@ void rebuildPresetList() {
     }
     S->listCount = bank.count();
     S->listCurrent = S->currentPreset;
-    if (S->currentPreset >= 0 && S->currentPreset < bank.count()) {
-        lv_obj_t* cur = lv_obj_get_child(S->presetList, S->currentPreset);
-        if (cur) lv_obj_scroll_to_view(cur, LV_ANIM_OFF);
-    }
+    if (currentBtn) lv_obj_scroll_to_view(currentBtn, LV_ANIM_OFF);
 }
 
 std::string slugify(const std::string& name) {
@@ -1286,6 +1340,7 @@ std::string slugify(const std::string& name) {
 
 void flashInfo(const char* msg) {
     if (S->presetInfo) lv_label_set_text(S->presetInfo, msg);
+    else std::fprintf(stderr, "xowave: %s\n", msg);
 }
 
 bool savePreset(const std::string& name, int idx) {
@@ -1436,6 +1491,231 @@ void deleteEvent(lv_event_t*) {
     lv_obj_set_style_bg_color(d, C(kSignal), 0);
     lv_obj_set_style_border_color(d, C(kSignal), 0);
     lv_obj_align(d, LV_ALIGN_BOTTOM_RIGHT, -6, -6);
+}
+
+// Undo / compare ------------------------------------------------------------
+
+std::array<float, P_COUNT> currentValues() {
+    std::array<float, P_COUNT> a;
+    for (int i = 0; i < P_COUNT; ++i) a[i] = S->values[i];
+    return a;
+}
+
+void applyValues(const std::array<float, P_COUNT>& a) {
+    S->applying = true;
+    for (int i = 0; i < P_COUNT; ++i) setParamUi(i, a[i]);
+    S->applying = false;
+    for (auto& k : S->knobs) updateKnob(*k);
+    for (int i = 0; i < P_COUNT; ++i) refreshViews(i);
+}
+
+void showUndoCompare() {
+    if (S->undoBtn) {
+        if (S->undo.empty()) lv_obj_add_state(S->undoBtn, LV_STATE_DISABLED);
+        else lv_obj_remove_state(S->undoBtn, LV_STATE_DISABLED);
+    }
+    setButtonOn(S->compareBtn, S->comparing, kSignal);
+    if (S->presetLabel) lv_obj_set_style_text_color(S->presetLabel, C(S->comparing ? kSignal : kText), 0);
+}
+
+// The sound as it was before the latest edits goes on the undo stack.
+void pushUndo() {
+    if (!S->stableSet) { S->stable = currentValues(); S->stableSet = true; return; }
+    if (S->stable == currentValues() && !S->undo.empty() && S->undo.back() == S->stable) return;
+    S->undo.push_back(S->stable);
+    if (S->undo.size() > 40) S->undo.erase(S->undo.begin());
+    S->stable = currentValues();
+    showUndoCompare();
+}
+
+// Called ~20x a second: edits that settle for 1.2 s become one undo step.
+void trackUndo() {
+    if (S->comparing) return;
+    if (!S->stableSet) { S->stable = currentValues(); S->stableSet = true; return; }
+    if (tickMs() - S->lastChange < 1200) return;
+    auto now = currentValues();
+    if (now == S->stable) return;
+    S->undo.push_back(S->stable);
+    if (S->undo.size() > 40) S->undo.erase(S->undo.begin());
+    S->stable = now;
+    showUndoCompare();
+}
+
+void undoEvent(lv_event_t*) {
+    if (S->comparing) endCompare();
+    auto now = currentValues();
+    if (now != S->stable) { applyValues(S->stable); showUndoCompare(); return; }   // unsettled edits first
+    if (S->undo.empty()) return;
+    S->stable = S->undo.back();
+    S->undo.pop_back();
+    applyValues(S->stable);
+    showUndoCompare();
+}
+
+void endCompare() {
+    if (!S->comparing) return;
+    S->comparing = false;
+    showUndoCompare();
+}
+
+void compareEvent(lv_event_t*) {
+    PresetBank* bank = S->cfg.bank;
+    if (!bank || S->currentPreset < 0 || S->currentPreset >= bank->count()) return;
+    if (!S->comparing) {      // hear the saved preset
+        S->stash = currentValues();
+        float v[P_COUNT];
+        bank->read(S->currentPreset, v);
+        std::array<float, P_COUNT> saved;
+        for (int i = 0; i < P_COUNT; ++i) saved[i] = paramClamp(i, v[i], S->numTables);
+        S->comparing = true;
+        applyValues(saved);
+    } else {                  // back to the edited sound
+        S->comparing = false;
+        applyValues(S->stash);
+    }
+    showUndoCompare();
+}
+
+// Favourites ------------------------------------------------------------------
+
+bool isFav(const char* name) {
+    auto it = S->stateKv.find(std::string("fav.") + name);
+    return it != S->stateKv.end() && it->second == "1";
+}
+
+void favToggle(lv_event_t* e) {
+    int idx = static_cast<int>(reinterpret_cast<intptr_t>(lv_event_get_user_data(e)));
+    if (!S->cfg.bank || idx >= S->cfg.bank->count()) return;
+    std::string key = std::string("fav.") + S->cfg.bank->name(idx);
+    if (isFav(S->cfg.bank->name(idx))) { S->stateKv.erase(key); S->stateDirty = true; S->stateSaveAt = tickMs() + 500; }
+    else markState(key, "1");
+    S->listCount = -1;   // rebuild
+}
+
+void favOnlyEvent(lv_event_t*) {
+    S->favOnly = !S->favOnly;
+    setButtonOn(S->favBtn, S->favOnly);
+    S->listCount = -1;
+}
+
+// XY pad ------------------------------------------------------------------------
+
+const int kXyChoices[] = {P_A_POS,  P_B_POS,     P_CUTOFF,   P_RESO,      P_FENV,      P_DRIVE,     P_LFO_RATE,
+                          P_LFO_POS, P_LFO_CUTOFF, P_A_LEVEL,  P_B_LEVEL,   P_SUB_LEVEL, P_NOISE,     P_CHORUS_MIX,
+                          P_DELAY_MIX, P_DELAY_FB, P_REVERB_MIX, P_REVERB_SIZE, P_FX_DRIVE, P_GLIDE};
+constexpr int kNumXy = sizeof(kXyChoices) / sizeof(kXyChoices[0]);
+constexpr int kXyW = 368, kXyH = 300;
+
+std::string shortName(int id) {
+    std::string n = kParams[id].name;
+    for (char& c : n) c = (c == '_') ? ' ' : static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+    return n;
+}
+
+void showXy() {
+    if (!S->xyDot) return;
+    float nx = paramToNormalized(S->xyParam[0], S->values[S->xyParam[0]], S->numTables);
+    float ny = paramToNormalized(S->xyParam[1], S->values[S->xyParam[1]], S->numTables);
+    lv_obj_set_pos(S->xyDot, static_cast<int32_t>(nx * (kXyW - 1)) - 14, static_cast<int32_t>((1 - ny) * (kXyH - 1)) - 14);
+    for (int a = 0; a < 2; ++a) {
+        char val[24];
+        paramFormat(S->xyParam[a], S->values[S->xyParam[a]], val, sizeof val, S->tableNames.data(), S->numTables);
+        lv_label_set_text_fmt(S->xyName[a], "%s\n%s", shortName(S->xyParam[a]).c_str(), val);
+    }
+}
+
+void xyTouch(lv_event_t* e) {
+    lv_point_t pt;
+    lv_indev_get_point(lv_indev_active(), &pt);
+    lv_area_t a;
+    lv_obj_get_coords(lv_event_get_target_obj(e), &a);
+    float nx = std::clamp(static_cast<float>(pt.x - a.x1) / (kXyW - 1), 0.0f, 1.0f);
+    float ny = std::clamp(1.0f - static_cast<float>(pt.y - a.y1) / (kXyH - 1), 0.0f, 1.0f);
+    setParamUi(S->xyParam[0], paramFromNormalized(S->xyParam[0], nx, S->numTables));
+    setParamUi(S->xyParam[1], paramFromNormalized(S->xyParam[1], ny, S->numTables));
+    showXy();
+}
+
+void xyPick(lv_event_t* e) {
+    intptr_t u = reinterpret_cast<intptr_t>(lv_event_get_user_data(e));
+    int axis = static_cast<int>(u >> 1), dir = (u & 1) ? 1 : -1;
+    int cur = 0;
+    for (int i = 0; i < kNumXy; ++i) if (kXyChoices[i] == S->xyParam[axis]) cur = i;
+    int next = (cur + dir + kNumXy) % kNumXy;
+    if (kXyChoices[next] == S->xyParam[1 - axis]) next = (next + dir + kNumXy) % kNumXy;   // never both the same
+    S->xyParam[axis] = kXyChoices[next];
+    markState(axis ? "ui.xy_y" : "ui.xy_x", kParams[S->xyParam[axis]].name);
+    showXy();
+}
+
+void xyClose(lv_event_t*) {
+    if (S->xyPad) lv_obj_delete(S->xyPad);
+    S->xyPad = S->xyDot = nullptr;
+    S->xyName[0] = S->xyName[1] = nullptr;
+}
+
+void openXy(lv_event_t*) {
+    for (int a = 0; a < 2; ++a) {
+        auto it = S->stateKv.find(a ? "ui.xy_y" : "ui.xy_x");
+        if (it != S->stateKv.end()) { int id = findParam(it->second); if (id >= 0) S->xyParam[a] = id; }
+    }
+    S->xyPad = lv_obj_create(lv_layer_top());
+    lv_obj_remove_style_all(S->xyPad);
+    lv_obj_set_size(S->xyPad, kW, kH);
+    lv_obj_set_style_bg_color(S->xyPad, C(kBg), 0);
+    lv_obj_set_style_bg_opa(S->xyPad, LV_OPA_COVER, 0);
+    lv_obj_add_flag(S->xyPad, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_remove_flag(S->xyPad, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t* pad = lv_obj_create(S->xyPad);
+    lv_obj_remove_style_all(pad);
+    lv_obj_set_size(pad, kXyW, kXyH);
+    lv_obj_set_pos(pad, 6, 10);
+    lv_obj_set_style_border_width(pad, 2, 0);
+    lv_obj_set_style_border_color(pad, C(kText), 0);
+    lv_obj_add_flag(pad, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_remove_flag(pad, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_remove_flag(pad, LV_OBJ_FLAG_SCROLL_CHAIN);
+    for (int g = 1; g < 4; ++g) {   // quarter grid
+        lv_obj_t* v = lv_obj_create(pad);
+        lv_obj_remove_style_all(v);
+        lv_obj_set_size(v, 1, kXyH - 4);
+        lv_obj_set_pos(v, kXyW * g / 4, 0);
+        lv_obj_set_style_bg_color(v, C(kLine), 0);
+        lv_obj_set_style_bg_opa(v, LV_OPA_COVER, 0);
+        lv_obj_t* h = lv_obj_create(pad);
+        lv_obj_remove_style_all(h);
+        lv_obj_set_size(h, kXyW - 4, 1);
+        lv_obj_set_pos(h, 0, kXyH * g / 4);
+        lv_obj_set_style_bg_color(h, C(kLine), 0);
+        lv_obj_set_style_bg_opa(h, LV_OPA_COVER, 0);
+    }
+    S->xyDot = lv_obj_create(pad);
+    lv_obj_remove_style_all(S->xyDot);
+    lv_obj_set_size(S->xyDot, 28, 28);
+    lv_obj_set_style_radius(S->xyDot, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_color(S->xyDot, C(kSignal), 0);
+    lv_obj_set_style_bg_opa(S->xyDot, LV_OPA_COVER, 0);
+    lv_obj_remove_flag(S->xyDot, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(pad, xyTouch, LV_EVENT_PRESSED, nullptr);
+    lv_obj_add_event_cb(pad, xyTouch, LV_EVENT_PRESSING, nullptr);
+
+    for (int a = 0; a < 2; ++a) {   // axis pickers
+        int y = 10 + a * 112;
+        lv_obj_t* t = label(S->xyPad, a ? "Y  " LV_SYMBOL_UP : "X  " LV_SYMBOL_RIGHT, fLabel, kDim);
+        lv_obj_set_pos(t, 384, y);
+        S->xyName[a] = label(S->xyPad, "", fLabel, kText);
+        lv_obj_set_width(S->xyName[a], 92);
+        lv_label_set_long_mode(S->xyName[a], LV_LABEL_LONG_WRAP);
+        lv_obj_set_pos(S->xyName[a], 384, y + 18);
+        lv_obj_t* l = button(S->xyPad, LV_SYMBOL_LEFT, 42, 34, xyPick, reinterpret_cast<void*>(static_cast<intptr_t>(a * 2)));
+        lv_obj_set_pos(l, 384, y + 62);
+        lv_obj_t* r = button(S->xyPad, LV_SYMBOL_RIGHT, 42, 34, xyPick, reinterpret_cast<void*>(static_cast<intptr_t>(a * 2 + 1)));
+        lv_obj_set_pos(r, 432, y + 62);
+    }
+    lv_obj_t* done = button(S->xyPad, "DONE", 90, 40, xyClose);
+    lv_obj_set_pos(done, 384, 270);
+    showXy();
 }
 
 // USB stick ------------------------------------------------------------------
@@ -1642,14 +1922,20 @@ void buildPresets(lv_obj_t* tab) {
     lv_obj_t* side = panel(tab, 164, 236);
     lv_obj_set_flex_flow(side, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(side, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_row(side, 6, 0);
-    button(side, LV_SYMBOL_SAVE " SAVE", 150, 40, saveEvent);
-    button(side, LV_SYMBOL_EDIT " SAVE AS", 150, 40, openSaveAs);
-    button(side, LV_SYMBOL_TRASH " DELETE", 150, 40, deleteEvent);
-    button(side, LV_SYMBOL_USB " USB", 150, 40, openUsb);
-    S->presetInfo = label(side, "PROGRAM CHANGE PICKS A PRESET BY NUMBER.", fLabel, kDim);
-    lv_obj_set_width(S->presetInfo, 150);
-    lv_label_set_long_mode(S->presetInfo, LV_LABEL_LONG_WRAP);
+    lv_obj_set_style_pad_row(side, 5, 0);
+    button(side, LV_SYMBOL_SAVE " SAVE", 150, 38, saveEvent);
+    button(side, LV_SYMBOL_EDIT " SAVE AS", 150, 38, openSaveAs);
+    lv_obj_t* r1 = row(side, 150, 38);
+    lv_obj_set_flex_align(r1, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    button(r1, LV_SYMBOL_TRASH, 72, 38, deleteEvent);
+    button(r1, LV_SYMBOL_USB " USB", 72, 38, openUsb);
+    lv_obj_t* r2 = row(side, 150, 38);
+    lv_obj_set_flex_align(r2, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    S->undoBtn = button(r2, "UNDO", 72, 38, undoEvent);
+    S->compareBtn = button(r2, "COMPARE", 72, 38, compareEvent);
+    S->favBtn = button(side, LV_SYMBOL_OK " FAVOURITES", 150, 38, favOnlyEvent);
+    S->presetInfo = nullptr;
+    showUndoCompare();
     rebuildPresetList();
 }
 
@@ -2550,6 +2836,7 @@ void syncFromEngine() {
             float v = st->param[i].load(std::memory_order_relaxed);
             if (v == S->values[i] || static_cast<int32_t>(now - S->pendingUntil[i]) < 0) continue;
             S->values[i] = v;
+            S->lastChange = now;
             for (auto& k : S->knobs) if (k->id == i && !k->dragging) updateKnob(*k);
             refreshViews(i);
         }
@@ -2594,6 +2881,8 @@ void syncFromEngine() {
     if (S->btState.load() == 2) { S->btState = 0; showBtResults(); }
     pollLearn();
     showTempo();
+    trackUndo();
+    if (S->xyPad && serial != S->lastSerialXy) { S->lastSerialXy = serial; showXy(); }
     if (S->midiInputsReady.exchange(false) && S->midiInputs) {
         std::lock_guard<std::mutex> lock(S->midiMutex);
         lv_label_set_text(S->midiInputs, S->midiInputsText.c_str());
@@ -3090,6 +3379,9 @@ bool uiSnapshot(const UiConfig& cfg, const std::string& dir) {
         shot("8-usb");
         closeModal();
     }
+    openXy(nullptr);
+    shot("8-xy-pad");
+    xyClose(nullptr);
     openVolume(nullptr);
     shot("8-volume");
     volClose(nullptr);
