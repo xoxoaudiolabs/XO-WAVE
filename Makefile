@@ -21,7 +21,7 @@ ifeq ($(UNAME_M),armv7l)
   CFLAGS += -mcpu=cortex-a53 -mfpu=neon-fp-armv8 -mfloat-abi=hard
 endif
 
-SRCS := src/main.cpp src/synth.cpp src/wavetable.cpp src/params.cpp src/config.cpp src/studio_link.cpp src/ui/ui.cpp
+SRCS := src/main.cpp src/synth.cpp src/wavetable.cpp src/params.cpp src/config.cpp src/fx.cpp src/studio_link.cpp src/ui/ui.cpp
 LVGL_SRCS := $(shell find third_party/lvgl/src -name '*.c')
 
 ifeq ($(UNAME_S),Linux)
@@ -57,7 +57,7 @@ clean:
 .PHONY: clean
 -include $(OBJS:.o=.d) $(LVGL_OBJS:.o=.d)
 
-TEST_OBJS := build/synth.o build/wavetable.o build/params.o
+TEST_OBJS := build/synth.o build/fx.o build/wavetable.o build/params.o
 
 build/engine_test: tests/engine_test.cpp $(TEST_OBJS) | build
 	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDLIBS)

@@ -135,6 +135,9 @@ struct State {
     // MOD
     lv_obj_t* lfoShape = nullptr;
     lv_obj_t* lfoChart = nullptr;
+
+    // FX
+    lv_obj_t* pingPong = nullptr;
     lv_chart_series_t* lfoSer = nullptr;
     int32_t lfoY[kLfoPts] = {};
 
@@ -631,6 +634,7 @@ void refreshViews(int id) {
         case P_AMP_A: case P_AMP_D: case P_AMP_S: case P_AMP_R: drawEnv(0); break;
         case P_MOD_A: case P_MOD_D: case P_MOD_S: case P_MOD_R: drawEnv(1); break;
         case P_LFO_SHAPE: drawLfo(); break;
+        case P_DELAY_PP: setButtonOn(S->pingPong, S->values[P_DELAY_PP] >= 0.5f); break;
         default: break;
     }
 }
@@ -796,6 +800,53 @@ void buildEnv(lv_obj_t* tab) {
 void lfoShapeEvent(lv_event_t* e) {
     lv_obj_t* m = lv_event_get_target_obj(e);
     setParamUi(P_LFO_SHAPE, static_cast<float>(lv_buttonmatrix_get_selected_button(m)));
+}
+
+// FX ------------------------------------------------------------------------
+
+void pingPongEvent(lv_event_t*) {
+    setParamUi(P_DELAY_PP, S->values[P_DELAY_PP] >= 0.5f ? 0.0f : 1.0f);
+}
+
+lv_obj_t* fxPanel(lv_obj_t* tab, int w) {
+    lv_obj_t* p = panel(tab, w, 116);
+    lv_obj_set_flex_flow(p, LV_FLEX_FLOW_ROW_WRAP);
+    lv_obj_set_flex_align(p, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_row(p, 2, 0);
+    return p;
+}
+
+lv_obj_t* fxTitle(lv_obj_t* parent, const char* text, int w) {
+    lv_obj_t* t = label(parent, text, fLabel, kText);
+    lv_obj_set_width(t, w);
+    return t;
+}
+
+void buildFx(lv_obj_t* tab) {
+    // DELAY + bus drive
+    lv_obj_t* d = fxPanel(tab, 472);
+    lv_obj_t* head = row(d, 460, 24);
+    lv_obj_set_flex_align(head, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    label(head, "DELAY", fLabel, kText);
+    S->pingPong = button(head, "PING-PONG", 104, 22, pingPongEvent);
+    knob(d, P_DELAY_SYNC, "SYNC");
+    knob(d, P_DELAY_TIME, "TIME");
+    knob(d, P_DELAY_FB, "FEEDBACK");
+    knob(d, P_DELAY_TONE, "TONE");
+    knob(d, P_DELAY_MIX, "MIX");
+    knob(d, P_FX_DRIVE, "DRIVE");
+
+    // CHORUS | REVERB
+    lv_obj_t* cr = fxPanel(tab, 472);
+    fxTitle(cr, "CHORUS", 220);
+    fxTitle(cr, "REVERB", 220);
+    knob(cr, P_CHORUS_RATE, "RATE");
+    knob(cr, P_CHORUS_DEPTH, "DEPTH");
+    knob(cr, P_CHORUS_MIX, "MIX");
+    knob(cr, P_REVERB_SIZE, "SIZE");
+    knob(cr, P_REVERB_DAMP, "DAMP");
+    knob(cr, P_REVERB_MIX, "MIX");
+    setButtonOn(S->pingPong, S->values[P_DELAY_PP] >= 0.5f);
 }
 
 void buildMod(lv_obj_t* tab) {
@@ -1840,7 +1891,7 @@ void presetStep(lv_event_t* e) {
     loadPresetUi((cur + dir + n) % n);
 }
 
-void presetLabelClick(lv_event_t*) { lv_tabview_set_active(S->tabview, 5, LV_ANIM_OFF); }
+void presetLabelClick(lv_event_t*) { lv_tabview_set_active(S->tabview, 6, LV_ANIM_OFF); }
 
 lv_obj_t* meterBar(lv_obj_t* parent, int y) {
     lv_obj_t* b = lv_bar_create(parent);
@@ -2061,7 +2112,10 @@ void syncFromEngine() {
 
     if (!S->muted) {
         float m = st->master.load(std::memory_order_relaxed);
-        if (std::fabs(m - S->master) > 0.004f) setMaster(m, true);  // moved by MIDI CC7
+        if (std::fabs(m - S->master) > 0.004f) {  // moved by MIDI CC7
+            std::fprintf(stderr, "xowave: master volume %.0f%% -> %.0f%% (MIDI CC7)\n", S->master * 100, m * 100);
+            setMaster(m, true);
+        }
     }
     uint32_t midi = st->midiEvents.load();
     if (midi != S->lastMidi) { S->lastMidi = midi; S->midiFlashUntil = now + 120; }
@@ -2099,7 +2153,8 @@ void styleTabBar() {
     for (uint32_t i = 0; i < n; ++i) {
         lv_obj_t* b = lv_obj_get_child(bar, static_cast<int32_t>(i));
         lv_obj_set_style_text_font(b, fLabel, 0);
-        lv_obj_set_style_text_letter_space(b, 1, 0);
+        lv_obj_set_style_text_letter_space(b, 0, 0);   // 8 tabs: 60 px each
+        lv_obj_set_style_pad_hor(b, 0, 0);
         lv_obj_set_style_text_color(b, C(kDim), 0);
         lv_obj_set_style_radius(b, 0, 0);
         lv_obj_set_style_border_width(b, 0, 0);
@@ -2151,6 +2206,7 @@ void buildUi() {
     buildFilter(addTab("FILTER"));
     buildEnv(addTab("ENV"));
     buildMod(addTab("MOD"));
+    buildFx(addTab("FX"));
     buildKeys(addTab("KEYS"));
     buildPresets(addTab("PRESETS"));
     buildSettings(addTab("SETTINGS"));
@@ -2532,8 +2588,8 @@ bool uiSnapshot(const UiConfig& cfg, const std::string& dir) {
         bool ok = writePng(path, kW, kH, gSnapRgb);
         std::printf("%s %s\n", ok ? "wrote" : "FAILED", path.c_str());
     };
-    static const char* names[] = {"1-osc-a", "2-filter", "3-env", "4-mod", "5-keys", "6-presets", "7-settings-midi"};
-    for (uint32_t i = 0; i < 7; ++i) {
+    static const char* names[] = {"1-osc-a", "2-filter", "3-env", "4-mod", "4b-fx", "5-keys", "6-presets", "7-settings-midi"};
+    for (uint32_t i = 0; i < 8; ++i) {
         lv_tabview_set_active(S->tabview, i, LV_ANIM_OFF);
         syncFromEngine();
         shot(names[i]);

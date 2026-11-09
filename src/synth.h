@@ -8,6 +8,7 @@
 
 #include "dsp.h"
 #include "engine_link.h"
+#include "fx.h"
 #include "params.h"
 #include "wavetable.h"
 
@@ -93,6 +94,8 @@ private:
     float glideCoef_ = 0;
     float livePos_[2] = {-1, -1};
     float masterSmooth_ = 0.64f;
+    FxBus fx_;
+    float bpm_ = 120.0f;   // tempo for synced effects (external MIDI clock or the internal tempo)
     float panL_[kMaxUnison + 1][kMaxUnison], panR_[kMaxUnison + 1][kMaxUnison];
     Rng rng_;
 };

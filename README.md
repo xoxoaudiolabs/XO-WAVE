@@ -86,6 +86,7 @@ Tabs along the bottom:
 | **FILTER** | Low / band / high-pass, live response curve, cutoff, resonance, envelope amount, key tracking, drive, velocity |
 | **ENV** | Amp and mod envelopes with shape previews |
 | **MOD** | LFO shape/rate and destinations, mod-env → position, velocity, glide, bend range, stereo spread, volume |
+| **FX** | Delay (free or synced to the tempo: 1/32 to 4 bars, triplets and dotted; feedback, tone, ping-pong), chorus, reverb (size, damping) and a bus drive before them |
 | **KEYS** | Two-octave keyboard, octave shift, hold (latch), all notes off |
 | **PRESETS** | Load, save, save as (on-screen keyboard), delete |
 | **SETTINGS** | MIDI (channel, MIDI learn, connected inputs) · Bluetooth (scan & pair, forget, latency) · Audio (buffer, polyphony) · Display (touch calibration, knob speed) · System (status, restart, reboot, shut down) |

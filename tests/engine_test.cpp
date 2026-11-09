@@ -115,6 +115,32 @@ int main() {
         check(s.activeVoices() == 0, "voice frees itself after release");
     }
 
+    {  // 5. Effects: everything maxed stays finite and bounded; the delay really echoes.
+        Synth s(sr, 8, tables);
+        for (int id : {P_CHORUS_MIX, P_DELAY_MIX, P_REVERB_MIX, P_FX_DRIVE, P_REVERB_SIZE}) s.setParam(id, 1.0f);
+        s.setParam(P_DELAY_FB, 0.95f);
+        s.setParam(P_DELAY_SYNC, 0);
+        s.setParam(P_DELAY_TIME, 0.25f);
+        s.setParam(P_AMP_R, 0.01f);
+        std::vector<float> L(128), R(128);
+        bool ok = true;
+        float peak = 0, echo = 0;
+        s.noteOn(60, 127);
+        for (int b = 0; b < 20; ++b) s.render(L.data(), R.data(), 128);
+        s.allNotesOff(true);
+        for (int b = 0; b < 3000; ++b) {   // 8 s of tail
+            s.render(L.data(), R.data(), 128);
+            for (int i = 0; i < 128; ++i) {
+                if (!std::isfinite(L[i]) || !std::isfinite(R[i])) ok = false;
+                peak = std::max(peak, std::max(std::fabs(L[i]), std::fabs(R[i])));
+                if (b > 100 && b < 200) echo = std::max(echo, std::fabs(L[i]) + std::fabs(R[i]));
+            }
+        }
+        char msg[120];
+        std::snprintf(msg, sizeof msg, "FX maxed (feedback 95%%): finite=%d peak %.3f, echo after note off %.3f", ok, peak, echo);
+        check(ok && peak <= 1.0001f && echo > 0.01f, msg);
+    }
+
     std::printf(failures ? "\n%d check(s) failed\n" : "\nall checks passed\n", failures);
     return failures ? 1 : 0;
 }

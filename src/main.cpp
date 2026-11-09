@@ -215,6 +215,8 @@ static int bench(Synth& synth, int rate, int voices) {
     synth.setParam(P_DRIVE, 0.5f);
     synth.setParam(P_LFO_POS, 0.5f);
     synth.setParam(P_AMP_S, 1.0f);
+    // ... with every effect on.
+    for (int id : {P_CHORUS_MIX, P_DELAY_MIX, P_REVERB_MIX, P_FX_DRIVE}) synth.setParam(id, 0.5f);
     for (int i = 0; i < voices; ++i) synth.noteOn(40 + i * 3, 100);
 
     const int block = 128;
@@ -223,7 +225,7 @@ static int bench(Synth& synth, int rate, int voices) {
     auto t0 = std::chrono::steady_clock::now();
     for (int done = 0; done < seconds * rate; done += block) synth.render(L.data(), R.data(), block);
     double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
-    std::printf("%d voices x 2 osc x 4 unison: %.1f%% of one CPU core (%d active)\n", voices,
+    std::printf("%d voices x 2 osc x 4 unison + all FX: %.1f%% of one CPU core (%d active)\n", voices,
                 100.0 * elapsed / seconds, synth.activeVoices());
     return 0;
 }
@@ -462,6 +464,7 @@ int main(int argc, char** argv) {
     }
 
     gStatus.master.store(std::clamp(static_cast<float>(std::atof(kvGet(conf, "master.volume", "0.8").c_str())), 0.0f, 1.0f));
+    std::fprintf(stderr, "xowave: master volume %.0f%%\n", gStatus.master.load() * 100);
 
 #ifndef XO_NO_ALSA
     // Splash on the touchscreen as early as possible, before the slow work.

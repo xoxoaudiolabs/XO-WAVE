@@ -8,6 +8,7 @@ namespace xo {
 Synth::Synth(float sampleRate, int voices, const std::vector<Wavetable>& tables)
     : sr_(sampleRate), numVoices_(std::clamp(voices, 1, kMaxVoices)), tables_(tables) {
     clearCcMap();
+    fx_.init(sampleRate);
     for (int i = 0; i < P_COUNT; ++i) target_[i] = paramClamp(i, kParams[i].def, numTables());
     smooth_ = target_;
     for (int u = 0; u < kMaxUnison; ++u) {
@@ -230,7 +231,10 @@ void Synth::renderBlock(float* left, float* right, int n) {
     // Master volume: fader position squared (roughly how loudness feels), smoothed so moves don't zipper.
     float fader = status_ ? clampf(status_->master.load(std::memory_order_relaxed), 0.0f, 1.0f) : 0.8f;
     masterSmooth_ += (fader * fader - masterSmooth_) * 0.15f;
-    const float gain = smooth_[P_VOLUME] * 0.4f * masterSmooth_ / 0.64f;  // 0.8 = unity
+    const float patch = smooth_[P_VOLUME] * 0.4f;
+    for (int i = 0; i < n; ++i) { accL[i] *= patch; accR[i] *= patch; }
+    fx_.process(accL, accR, n, smooth_.data(), bpm_);   // drive -> chorus -> delay -> reverb
+    const float gain = masterSmooth_ / 0.64f;           // 0.8 = unity
     for (int i = 0; i < n; ++i) {
         left[i] = softClip(accL[i] * gain);
         right[i] = softClip(accR[i] * gain);

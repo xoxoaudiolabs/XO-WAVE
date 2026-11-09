@@ -50,7 +50,20 @@ const ParamInfo kParams[P_COUNT] = {
     {"vel_filter", 0, 1, 0.3f, LIN, false, "Velocity -> filter env amount"},
     {"glide", 0, 2, 0, LIN, false, "Portamento time (s)"},
     {"bend_range", 0, 24, 2, LIN, true, "Pitch bend range (semitones)"},
-    {"volume", 0, 1, 0.7f, LIN, false, "Master volume"},
+    {"volume", 0, 1, 0.7f, LIN, false, "Patch volume"},
+    {"fx_drive", 0, 1, 0, LIN, false, "FX bus drive (before the effects)"},
+    {"chorus_mix", 0, 1, 0, LIN, false, "Chorus amount"},
+    {"chorus_rate", 0.05f, 5, 0.5f, EXP, false, "Chorus rate (Hz)"},
+    {"chorus_depth", 0, 1, 0.5f, LIN, false, "Chorus depth"},
+    {"delay_mix", 0, 1, 0, LIN, false, "Delay amount"},
+    {"delay_time", 0.01f, 2, 0.375f, EXP, false, "Delay time (s) when not synced"},
+    {"delay_sync", 0, 15, 8, LIN, true, "Delay sync: 0 free, else a note division of the tempo"},
+    {"delay_feedback", 0, 0.95f, 0.35f, LIN, false, "Delay feedback"},
+    {"delay_tone", 0, 1, 0.6f, LIN, false, "Delay tone (darker repeats when low)"},
+    {"delay_pingpong", 0, 1, 1, LIN, true, "Delay ping-pong between left and right"},
+    {"reverb_mix", 0, 1, 0, LIN, false, "Reverb amount"},
+    {"reverb_size", 0, 1, 0.6f, LIN, false, "Reverb room size"},
+    {"reverb_damp", 0, 1, 0.5f, LIN, false, "Reverb damping (darker when high)"},
 };
 
 int findParam(const std::string& name) {
@@ -121,6 +134,21 @@ void paramFormat(int id, float v, char* out, int len, const char* const* tableNa
         case P_AMP_A: case P_AMP_D: case P_AMP_R:
         case P_MOD_A: case P_MOD_D: case P_MOD_R:
             fmtTime(v, out, len);
+            return;
+        case P_DELAY_TIME:
+            fmtTime(v, out, len);
+            return;
+        case P_DELAY_SYNC: {
+            static const char* d[] = {"FREE", "1/32", "1/16T", "1/16", "1/8T", "1/16D", "1/8", "1/4T",
+                                      "1/8D", "1/4", "1/2T", "1/4D", "1/2", "1 BAR", "2 BARS", "4 BARS"};
+            std::snprintf(out, len, "%s", d[std::clamp(static_cast<int>(v), 0, 15)]);
+            return;
+        }
+        case P_DELAY_PP:
+            std::snprintf(out, len, "%s", v >= 0.5f ? "ON" : "OFF");
+            return;
+        case P_CHORUS_RATE:
+            std::snprintf(out, len, v < 1.0f ? "%.2fHz" : "%.1fHz", v);
             return;
         case P_GLIDE:
             if (v < 0.001f) std::snprintf(out, len, "OFF");
