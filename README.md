@@ -96,6 +96,18 @@ The screen calibrates itself the first time XO-Wave starts: tap the four targets
 
 The UI uses [LVGL](https://lvgl.io) (MIT), with the **Anton** and **IBM Plex Mono** fonts (SIL Open Font License, see `fonts/`).
 
+## Linking to XOXO Studio (Ethernet)
+
+Plug a cable straight from XO-Wave's Ethernet port into a [XOXO Studio](https://github.com/xoxoaudiolabs/XOXO-Studio), or put both on the same network. XO-Wave finds the Studio by itself (mDNS), the same way a Pocket links:
+
+- **MIDI both ways:** XO-Wave joins the Studio's network MIDI as `XO-Wave on <host>` and shows as **NET** in the Studio's MIDI routes. The Studio's keyboards, XO-4 and routes can play XO-Wave, and what you play on XO-Wave (its USB keyboard, KEYS page) goes to the Studio.
+- **Sound to the Studio:** XO-Wave streams its output as RTP (L16, 48 kHz stereo, 310-frame packets) to the Studio's UDP 46030, where it's a mixer channel, **XO-WAVE**, that you can hear, record and send to the Studio's speaker. While that's on, the Studio is the audio out: XO-Wave's 3.5 mm jack stays on as a headphone monitor and its Bluetooth speaker pauses (the Studio owns the speaker).
+- **Older Studios:** a Studio without XO-Wave support (before [XOXO-Studio#1](https://github.com/xoxoaudiolabs/XOXO-Studio/pull/1)) links for MIDI only; XO-Wave then keeps playing through its own jack and speaker. It checks the Studio's `/api/status` every 30 s, so updating the Studio switches the sound over without a restart.
+- On a bare cable both boxes give themselves a link-local address (169.254.x.x); the installer sets that up (`/etc/NetworkManager/conf.d/50-xowave-ethernet-link.conf`).
+- Turn the link on or off in **SETTINGS → STUDIO**; **LINK** lights in the top bar while linked. In `/etc/xowave.conf`: `link.enabled`, `link.studio` (`auto` or an address), `link.port`.
+
+Tested: the session, MIDI both ways and the audio packets against XOXO Studio's own `netmidi.py` (`tests/link_test.cpp` + `tests/fake_studio.py`), and a MIDI-only link to a real Studio on Wi-Fi. Not yet tried: sound into an updated Studio's XO-WAVE channel, a direct cable.
+
 ## Controls (default MIDI CC map)
 
 | CC | Parameter | CC | Parameter |

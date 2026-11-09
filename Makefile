@@ -21,7 +21,7 @@ ifeq ($(UNAME_M),armv7l)
   CFLAGS += -mcpu=cortex-a53 -mfpu=neon-fp-armv8 -mfloat-abi=hard
 endif
 
-SRCS := src/main.cpp src/synth.cpp src/wavetable.cpp src/params.cpp src/config.cpp src/ui/ui.cpp
+SRCS := src/main.cpp src/synth.cpp src/wavetable.cpp src/params.cpp src/config.cpp src/studio_link.cpp src/ui/ui.cpp
 LVGL_SRCS := $(shell find third_party/lvgl/src -name '*.c')
 
 ifeq ($(UNAME_S),Linux)

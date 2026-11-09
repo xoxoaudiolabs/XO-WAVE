@@ -66,6 +66,13 @@ if [[ $NO_WIFI == 1 ]]; then
     grep -q '^dtoverlay=disable-wifi' "$CFG" || echo 'dtoverlay=disable-wifi' >> "$CFG"
 fi
 
+echo "==> Ethernet (XOXO Studio link)"
+if [[ -d /etc/NetworkManager ]]; then
+    install -d /etc/NetworkManager/conf.d
+    install -m644 "$HERE/install/50-xowave-ethernet-link.conf" /etc/NetworkManager/conf.d/
+    nmcli general reload conf 2>/dev/null || true
+fi
+
 echo "==> Services"
 sed "s/@USER@/$RUN_USER/" "$HERE/install/xowave.service" > /etc/systemd/system/xowave.service
 install -m644 "$HERE/install/xowave-bt-keeper.service" /etc/systemd/system/xowave-bt-keeper.service

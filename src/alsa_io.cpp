@@ -4,6 +4,7 @@
 #include <cerrno>
 #include <cmath>
 #include <cstdio>
+#include <algorithm>
 #include <cstring>
 
 #include "synth.h"
@@ -197,7 +198,7 @@ void AlsaMidi::connectAll() {
     }
 }
 
-int AlsaMidi::poll(Synth& synth, int channel) {
+int AlsaMidi::poll(Synth& synth, int channel, Tap tap, void* tapCtx) {
     if (!seq_) return 0;
     int count = 0;
     snd_seq_event_t* ev = nullptr;
@@ -209,22 +210,37 @@ int AlsaMidi::poll(Synth& synth, int channel) {
 
         ++count;
         auto chOk = [&](int ch) { return channel == 0 || ch == channel - 1; };
+        auto fwd = [&](uint8_t a, uint8_t b, uint8_t c, int len) {
+            if (!tap) return;
+            const uint8_t m[3] = {a, b, c};
+            tap(tapCtx, m, len);
+        };
         switch (ev->type) {
             case SND_SEQ_EVENT_NOTEON:
                 if (chOk(ev->data.note.channel)) synth.noteOn(ev->data.note.note, ev->data.note.velocity);
+                fwd(static_cast<uint8_t>(0x90 | (ev->data.note.channel & 15)), ev->data.note.note, ev->data.note.velocity, 3);
                 break;
             case SND_SEQ_EVENT_NOTEOFF:
                 if (chOk(ev->data.note.channel)) synth.noteOff(ev->data.note.note);
+                fwd(static_cast<uint8_t>(0x80 | (ev->data.note.channel & 15)), ev->data.note.note, ev->data.note.velocity, 3);
                 break;
             case SND_SEQ_EVENT_CONTROLLER:
                 if (chOk(ev->data.control.channel))
                     synth.controlChange(static_cast<int>(ev->data.control.param), ev->data.control.value);
+                fwd(static_cast<uint8_t>(0xB0 | (ev->data.control.channel & 15)),
+                    static_cast<uint8_t>(ev->data.control.param & 127), static_cast<uint8_t>(ev->data.control.value & 127), 3);
                 break;
             case SND_SEQ_EVENT_PITCHBEND:
                 if (chOk(ev->data.control.channel)) synth.pitchBend(ev->data.control.value / 8192.0f);
+                {
+                    int v = std::max(0, std::min(16383, ev->data.control.value + 8192));
+                    fwd(static_cast<uint8_t>(0xE0 | (ev->data.control.channel & 15)), static_cast<uint8_t>(v & 127),
+                        static_cast<uint8_t>(v >> 7), 3);
+                }
                 break;
             case SND_SEQ_EVENT_PGMCHANGE:
                 if (chOk(ev->data.control.channel)) synth.programChange(ev->data.control.value);
+                fwd(static_cast<uint8_t>(0xC0 | (ev->data.control.channel & 15)), static_cast<uint8_t>(ev->data.control.value & 127), 0, 2);
                 break;
             case SND_SEQ_EVENT_PORT_START:
                 tryConnect(ev->data.addr.client, ev->data.addr.port);

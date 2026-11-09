@@ -1,6 +1,7 @@
 // XO-Wave touchscreen UI (LVGL). Runs on its own normal-priority thread and
 // talks to the engine only through engine_link.h.
 #pragma once
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -22,6 +23,11 @@ struct UiConfig {
     unsigned rate = 48000, period = 128, periods = 3;
 
     std::string fontsDir;      // Anton + IBM Plex Mono .ttf files
+
+    // XOXO Studio link (called on the UI thread).
+    std::function<std::string()> linkDescribe;
+    std::function<bool()> linkEnabled;
+    std::function<void(bool)> linkSetEnabled;
 
     std::string fbDevice;      // Linux framebuffer, e.g. /dev/fb1
     std::string touchDevice;   // evdev node, e.g. /dev/input/event2

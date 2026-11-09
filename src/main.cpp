@@ -13,12 +13,14 @@
 #include <vector>
 
 #include "config.h"
+#include "studio_link.h"
 #include "synth.h"
 #include "ui/ui.h"
 #include "wavetable.h"
 
 #ifndef XO_NO_ALSA
 #include <sched.h>
+#include <unistd.h>
 #include <sys/mman.h>
 
 #include "alsa_io.h"
@@ -68,13 +70,24 @@ static EngineStatus gStatus;
 static CommandQueue gCmds;
 
 // Applies commands from the touchscreen UI (called on the audio thread).
-static void drainCommands(Synth& synth) {
+// Notes played on the screen go to a linked Studio too.
+static void drainCommands(Synth& synth, StudioLink* link = nullptr) {
     Cmd c;
     while (gCmds.pop(c)) {
         switch (c.type) {
             case CmdType::SetParam: synth.setParam(c.a, c.b); break;
-            case CmdType::NoteOn: synth.noteOn(c.a, static_cast<int>(c.b)); break;
-            case CmdType::NoteOff: synth.noteOff(c.a); break;
+            case CmdType::NoteOn: {
+                synth.noteOn(c.a, static_cast<int>(c.b));
+                const uint8_t m[3] = {0x90, static_cast<uint8_t>(c.a & 127), static_cast<uint8_t>(static_cast<int>(c.b) & 127)};
+                if (link) link->pushMidiOut(m, 3);
+                break;
+            }
+            case CmdType::NoteOff: {
+                synth.noteOff(c.a);
+                const uint8_t m[3] = {0x80, static_cast<uint8_t>(c.a & 127), 0};
+                if (link) link->pushMidiOut(m, 3);
+                break;
+            }
             case CmdType::Program: synth.programChange(c.a); break;
             case CmdType::AllNotesOff: synth.allNotesOff(false); break;
         }
@@ -269,6 +282,21 @@ static int runLive(const KeyValues& conf, const std::vector<Wavetable>& tables, 
     if (!midi.open("XO-Wave", err)) std::fprintf(stderr, "xowave: %s (continuing without MIDI)\n", err.c_str());
     gStatus.midiChannel.store(kvGetInt(conf, "midi.channel", 0));
 
+    // XOXO Studio link (its own thread, normal priority). While linked, the
+    // Studio is the audio out: the jack stays on as a monitor, Bluetooth pauses.
+    StudioLink link;
+    {
+        StudioLink::Config lc;
+        lc.enabled = kvGet(conf, "link.enabled", "on") != "off";
+        lc.host = kvGet(conf, "link.studio", "auto");
+        lc.port = kvGetInt(conf, "link.studio_port", 5004);
+        lc.audioPort = kvGetInt(conf, "link.port", 46030);
+        char host[64] = "xowave";
+        gethostname(host, sizeof host - 1);
+        lc.name = std::string("XO-Wave on ") + host;
+        link.start(lc);
+    }
+
     // Bluetooth thread must be created before we go real-time so it stays
     // at normal priority.
     BtOutput bt;
@@ -281,6 +309,9 @@ static int runLive(const KeyValues& conf, const std::vector<Wavetable>& tables, 
     if (uiMode != "off") {
         UiConfig ui = makeUiConfig(conf, tables, audio.rate(), audio.period());
         ui.periods = audio.bufferSize() / std::max(1u, audio.period());
+        ui.linkDescribe = [&link] { return link.describe(); };
+        ui.linkEnabled = [&link] { return link.enabled(); };
+        ui.linkSetEnabled = [&link](bool on) { link.setEnabled(on); };
         ui.fbDevice = uiFindFramebuffer(kvGet(conf, "ui.fb", "auto"));
         ui.touchDevice = uiFindTouch(kvGet(conf, "ui.touch", "auto"));
         if (ui.fbDevice.empty()) {
@@ -327,8 +358,12 @@ static int runLive(const KeyValues& conf, const std::vector<Wavetable>& tables, 
     const double periodSec = static_cast<double>(period) / audio.rate();
     float cpu = 0;
     while (gRunning && gStatus.running.load(std::memory_order_relaxed)) {
-        drainCommands(*synth);
-        int ev = midi.poll(*synth, gStatus.midiChannel.load(std::memory_order_relaxed));
+        drainCommands(*synth, &link);
+        const int ch = gStatus.midiChannel.load(std::memory_order_relaxed);
+        int ev = midi.poll(*synth, ch, [](void* l, const uint8_t* m, int n) { static_cast<StudioLink*>(l)->pushMidiOut(m, n); },
+                           &link);
+        MidiMsg nm;
+        while (link.popMidiIn(nm)) { applyMidi(*synth, nm, ch); ++ev; }   // the Studio's routes playing XO-Wave
         if (ev) gStatus.midiEvents.fetch_add(static_cast<uint32_t>(ev), std::memory_order_relaxed);
         auto t0 = std::chrono::steady_clock::now();
         synth->render(L.data(), R.data(), period);
@@ -337,7 +372,12 @@ static int runLive(const KeyValues& conf, const std::vector<Wavetable>& tables, 
         gStatus.cpu.store(cpu, std::memory_order_relaxed);
         gStatus.xruns.store(static_cast<uint32_t>(audio.xruns()), std::memory_order_relaxed);
         gStatus.btConnected.store(bt.connected(), std::memory_order_relaxed);
-        bt.push(L.data(), R.data(), static_cast<size_t>(period));
+        // While a Studio plays XO-Wave's sound it is the audio out (and owns the
+        // speaker): Bluetooth pauses, the jack stays on. An older Studio links for MIDI only.
+        const bool toStudio = link.audioAccepted();
+        gStatus.linkState.store(link.state(), std::memory_order_relaxed);
+        if (toStudio) link.sendAudio(L.data(), R.data(), period);
+        else bt.push(L.data(), R.data(), static_cast<size_t>(period));
         if (!audio.write(L.data(), R.data(), period)) break;
         frames += static_cast<uint64_t>(period);
         if (frames >= 10ull * audio.rate()) {
@@ -353,6 +393,7 @@ static int runLive(const KeyValues& conf, const std::vector<Wavetable>& tables, 
     if (uiRunning) uiStop();
     saverQuit = true;
     saver.join();
+    link.stop();   // says BY, so the Studio drops XO-WAVE at once
     bt.stop();
     // Exit code 1 (restart requested from the UI or audio failure) makes systemd restart us.
     return (gRunning && !gStatus.running.load()) ? 1 : (gRunning ? 1 : 0);
@@ -414,7 +455,7 @@ int main(int argc, char** argv) {
         if (!statePath.empty() && readKeyValues(statePath, state)) {
             for (const auto& [k, v] : state) {
                 if (k.rfind("cc.", 0) == 0 || k == "midi.channel" || k == "audio.period" || k == "synth.voices" ||
-                    k == "bluetooth.latency_ms" || k == "master.volume")
+                    k == "bluetooth.latency_ms" || k == "master.volume" || k == "link.enabled")
                     conf[k] = v;
             }
         }
@@ -459,6 +500,10 @@ int main(int argc, char** argv) {
         UiConfig ui = makeUiConfig(conf, tables, static_cast<unsigned>(rate), 128);
         ui.fontsDir = "fonts";
         ui.presetsDir = snapshotDir;  // never write into the real presets folder
+        // Show the Studio link as it looks when linked.
+        gStatus.linkState.store(2);
+        ui.linkDescribe = [] { return std::string("LINKED: XOXO Studio on studio\n169.254.12.7"); };
+        ui.linkEnabled = [] { return true; };
         return uiSnapshot(ui, snapshotDir) ? 0 : 1;
     }
     if (doBench) {

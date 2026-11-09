@@ -155,7 +155,10 @@ struct State {
     lv_obj_t* sysInfo = nullptr;
     uint32_t sysNext = 0;
     lv_obj_t* settingsNav = nullptr;
-    lv_obj_t* section[5] = {};
+    lv_obj_t* section[6] = {};
+    lv_obj_t* linkLabel = nullptr;      // SETTINGS > STUDIO: who we're linked to
+    lv_obj_t* linkToggle = nullptr;
+    lv_obj_t* linkTop = nullptr;        // "LINK" in the top bar
     lv_obj_t* restartBanner = nullptr;
     lv_obj_t* learnLabel = nullptr;
     lv_obj_t* learnBtn = nullptr;
@@ -311,6 +314,16 @@ lv_obj_t* button(lv_obj_t* parent, const char* text, int w, int h, lv_event_cb_t
     lv_obj_center(l);
     if (cb) lv_obj_add_event_cb(b, cb, LV_EVENT_CLICKED, user);
     return b;
+}
+
+// A toggle button's on/off look, set directly (solid off-white with black text when on).
+void setButtonOn(lv_obj_t* b, bool on, uint32_t onColor = kText) {
+    if (!b) return;
+    lv_obj_set_style_bg_color(b, C(on ? onColor : kBg), 0);
+    lv_obj_set_style_border_color(b, C(on ? onColor : kText), 0);
+    lv_obj_set_style_text_color(b, C(on ? kBg : kText), 0);
+    lv_obj_t* l = lv_obj_get_child(b, 0);
+    if (l) lv_obj_set_style_text_color(l, C(on ? kBg : kText), 0);
 }
 
 lv_obj_t* chart(lv_obj_t* parent, int w, int h, int ymin, int ymax, int points, int32_t* ys,
@@ -855,8 +868,8 @@ void octaveEvent(lv_event_t* e) {
 
 void holdEvent(lv_event_t*) {
     S->hold = !S->hold;
-    if (S->hold) lv_obj_add_state(S->holdBtn, LV_STATE_CHECKED);
-    else { lv_obj_remove_state(S->holdBtn, LV_STATE_CHECKED); allNotesOffUi(); }
+    setButtonOn(S->holdBtn, S->hold);
+    if (!S->hold) allNotesOffUi();
 }
 
 void allOffEvent(lv_event_t*) { allNotesOffUi(); }
@@ -1418,10 +1431,10 @@ void learnEvent(lv_event_t*) {
     S->cfg.status->learnedCc.store(-1);
     S->cfg.status->learnParam.store(S->learning ? S->learnParam : -1);
     if (S->learning) {
-        lv_obj_add_state(S->learnBtn, LV_STATE_CHECKED);
+        setButtonOn(S->learnBtn, true, kSignal);
         lv_label_set_text(S->learnLabel, "MOVE A KNOB ON YOUR CONTROLLER...");
     } else {
-        lv_obj_remove_state(S->learnBtn, LV_STATE_CHECKED);
+        setButtonOn(S->learnBtn, false);
         lv_label_set_text(S->learnLabel, "");
     }
 }
@@ -1432,7 +1445,7 @@ void pollLearn() {
     if (cc < 0) return;
     S->learning = false;
     S->cfg.status->learnedCc.store(-1);
-    lv_obj_remove_state(S->learnBtn, LV_STATE_CHECKED);
+    setButtonOn(S->learnBtn, false);
     lv_label_set_text_fmt(S->learnLabel, "CC %d  >  %s  (SAVED)", cc, kParams[S->learnParam].name);
     markState("cc." + std::to_string(cc), kParams[S->learnParam].name);
 }
@@ -1550,6 +1563,51 @@ void voicesChange(Stepper* st, int dir) {
 
 void restartEvent(lv_event_t*);
 
+// STUDIO: the link to a XOXO Studio over Ethernet
+void updateLinkUi() {
+    bool on = S->cfg.linkEnabled ? S->cfg.linkEnabled() : false;
+    int st = S->cfg.status ? S->cfg.status->linkState.load() : 0;
+    if (S->linkLabel) {
+        std::string d = S->cfg.linkDescribe ? S->cfg.linkDescribe() : std::string("NOT AVAILABLE");
+        for (char& c : d) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+        lv_label_set_text(S->linkLabel, d.c_str());
+        lv_obj_set_style_text_color(S->linkLabel, C(st == 2 ? kText : kDim), 0);
+    }
+    if (S->linkToggle) {
+        lv_obj_t* l = lv_obj_get_child(S->linkToggle, 0);
+        lv_label_set_text(l, on ? "LINK: ON" : "LINK: OFF");
+        setButtonOn(S->linkToggle, on);
+    }
+    if (S->linkTop) {
+        lv_obj_set_style_text_color(S->linkTop, C(st == 2 ? kText : (st == 1 ? kLine2 : kBg)), 0);
+    }
+}
+
+void linkToggleEvent(lv_event_t*) {
+    if (!S->cfg.linkSetEnabled || !S->cfg.linkEnabled) return;
+    bool on = !S->cfg.linkEnabled();
+    S->cfg.linkSetEnabled(on);
+    markState("link.enabled", on ? "on" : "off");
+    updateLinkUi();
+}
+
+void buildStudioSection(lv_obj_t* p) {
+    sectionTitle(p, "STUDIO LINK");
+    label(p, "XOXO STUDIO", fLabel, kDim);
+    S->linkLabel = label(p, "", fSmall, kText);
+    lv_obj_set_width(S->linkLabel, 340);
+    lv_label_set_long_mode(S->linkLabel, LV_LABEL_LONG_WRAP);
+    lv_obj_set_height(S->linkLabel, 34);
+    S->linkToggle = button(p, "LINK: ON", 160, 38, linkToggleEvent);
+    lv_obj_t* note = label(p,
+        "PLUG A CABLE STRAIGHT INTO THE STUDIO (OR SHARE ITS NETWORK). XO-WAVE SHOWS AS XO-WAVE IN ITS MIXER, "
+        "AND MIDI GOES BOTH WAYS. WHILE LINKED THE STUDIO IS THE AUDIO OUT: THE JACK STAYS ON FOR HEADPHONES, "
+        "BLUETOOTH PAUSES.", fLabel, kDim);
+    lv_obj_set_width(note, 340);
+    lv_label_set_long_mode(note, LV_LABEL_LONG_WRAP);
+    updateLinkUi();
+}
+
 void buildAudioSection(lv_obj_t* p) {
     sectionTitle(p, "AUDIO");
     label(p, "OUTPUT", fLabel, kDim);
@@ -1623,7 +1681,7 @@ void buildSystemSection(lv_obj_t* p) {
 void settingsNavEvent(lv_event_t* e) {
     uint32_t sel = lv_buttonmatrix_get_selected_button(lv_event_get_target_obj(e));
     rememberView("ui.settings", static_cast<int>(sel));
-    for (uint32_t i = 0; i < 5; ++i) {
+    for (uint32_t i = 0; i < 6; ++i) {
         if (i == sel) lv_obj_remove_flag(S->section[i], LV_OBJ_FLAG_HIDDEN);
         else lv_obj_add_flag(S->section[i], LV_OBJ_FLAG_HIDDEN);
     }
@@ -1634,23 +1692,24 @@ void settingsNavEvent(lv_event_t* e) {
 void showSettingsSection(int idx) {
     setMatrixChecked(S->settingsNav, idx);
     rememberView("ui.settings", idx);
-    for (int i = 0; i < 5; ++i) {
+    for (int i = 0; i < 6; ++i) {
         if (i == idx) lv_obj_remove_flag(S->section[i], LV_OBJ_FLAG_HIDDEN);
         else lv_obj_add_flag(S->section[i], LV_OBJ_FLAG_HIDDEN);
     }
 }
 
 void buildSettings(lv_obj_t* tab) {
-    static const char* nav[] = {"MIDI", "\n", "BLUETOOTH", "\n", "AUDIO", "\n", "DISPLAY", "\n", "SYSTEM", ""};
+    static const char* nav[] = {"MIDI", "\n", "BLUETOOTH", "\n", "STUDIO", "\n", "AUDIO", "\n", "DISPLAY", "\n",
+                                "SYSTEM", ""};
     lv_obj_t* left = panel(tab, 112, 236);
     S->settingsNav = buttonMatrix(left, nav, 102, 226, settingsNavEvent);
     lv_obj_center(S->settingsNav);
 
     lv_obj_t* right = panel(tab, 356, 236);
     lv_obj_set_style_pad_all(right, 5, 0);
-    void (*builders[5])(lv_obj_t*) = {buildMidiSection, buildBluetoothSection, buildAudioSection,
-                                      buildDisplaySection, buildSystemSection};
-    for (int i = 0; i < 5; ++i) {
+    void (*builders[6])(lv_obj_t*) = {buildMidiSection, buildBluetoothSection, buildStudioSection,
+                                      buildAudioSection, buildDisplaySection, buildSystemSection};
+    for (int i = 0; i < 6; ++i) {
         lv_obj_t* sec = lv_obj_create(right);
         lv_obj_remove_style_all(sec);
         lv_obj_set_size(sec, 346, 226);
@@ -1809,10 +1868,7 @@ void showMaster() {
         lv_obj_set_style_text_color(S->volBig, C(S->muted ? kSignal : kText), 0);
     }
     if (S->volSlider) lv_slider_set_value(S->volSlider, pct, LV_ANIM_OFF);
-    if (S->volMute) {
-        if (S->muted) lv_obj_add_state(S->volMute, LV_STATE_CHECKED);
-        else lv_obj_remove_state(S->volMute, LV_STATE_CHECKED);
-    }
+    setButtonOn(S->volMute, S->muted, kSignal);
 }
 
 void setMaster(float v, bool fromUser) {
@@ -1907,16 +1963,19 @@ void buildTopBar(lv_obj_t* scr) {
     label(logo, "WAVE", fLogo, kText);
 
     lv_obj_t* prev = button(top, LV_SYMBOL_LEFT, 34, 28, presetStep, reinterpret_cast<void*>(static_cast<intptr_t>(-1)));
-    lv_obj_set_pos(prev, 124, 3);
+    lv_obj_set_pos(prev, 122, 3);
     S->presetLabel = label(top, "", fBig, kText);
-    lv_obj_set_width(S->presetLabel, 168);
-    lv_obj_set_pos(S->presetLabel, 162, 3);
+    lv_obj_set_width(S->presetLabel, 136);
+    lv_obj_set_pos(S->presetLabel, 158, 3);
     lv_label_set_long_mode(S->presetLabel, LV_LABEL_LONG_DOT);
     lv_obj_set_style_text_align(S->presetLabel, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_add_flag(S->presetLabel, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(S->presetLabel, presetLabelClick, LV_EVENT_CLICKED, nullptr);
     lv_obj_t* next = button(top, LV_SYMBOL_RIGHT, 34, 28, presetStep, reinterpret_cast<void*>(static_cast<intptr_t>(1)));
-    lv_obj_set_pos(next, 334, 3);
+    lv_obj_set_pos(next, 296, 3);
+
+    S->linkTop = label(top, "LINK", fLabel, kBg);   // shown while linked to a XOXO Studio
+    lv_obj_set_pos(S->linkTop, 336, 11);
 
     S->midiDot = lv_obj_create(top);
     lv_obj_remove_style_all(S->midiDot);
@@ -2016,7 +2075,7 @@ void syncFromEngine() {
         if (std::fabs(live - S->terrainPos) > 0.004f || tIdx != S->terrainTable) drawTerrain();
     }
 
-    if (static_cast<int32_t>(now - S->sysNext) >= 0) { S->sysNext = now + 1000; updateSystemInfo(); }
+    if (static_cast<int32_t>(now - S->sysNext) >= 0) { S->sysNext = now + 1000; updateSystemInfo(); updateLinkUi(); }
     if (S->btState.load() == 2) { S->btState = 0; showBtResults(); }
     pollLearn();
     if (S->midiInputsReady.exchange(false) && S->midiInputs) {
@@ -2064,7 +2123,7 @@ void restoreView() {
     S->octave = stateInt("ui.octave", 3, 0, 7);
     if (S->octLabel) lv_label_set_text_fmt(S->octLabel, "C%d", S->octave);
     setFocusOsc(stateInt("ui.osc", 0, 0, 1));
-    showSettingsSection(stateInt("ui.settings", 0, 0, 4));
+    showSettingsSection(stateInt("ui.settings", 0, 0, 5));
     lv_tabview_set_active(S->tabview, 0, LV_ANIM_OFF);  // always start on OSC; everything else is kept
 }
 
@@ -2479,9 +2538,9 @@ bool uiSnapshot(const UiConfig& cfg, const std::string& dir) {
         syncFromEngine();
         shot(names[i]);
     }
-    static const char* secNames[] = {"", "7-settings-bluetooth", "7-settings-audio", "7-settings-display",
+    static const char* secNames[] = {"", "7-settings-bluetooth", "7-settings-studio", "7-settings-audio", "7-settings-display",
                                      "7-settings-system"};
-    for (int i = 1; i < 5; ++i) { showSettingsSection(i); shot(secNames[i]); }
+    for (int i = 1; i < 6; ++i) { showSettingsSection(i); shot(secNames[i]); }
     showSettingsSection(0);
     lv_tabview_set_active(S->tabview, 0, LV_ANIM_OFF);
     setFocusOsc(1);

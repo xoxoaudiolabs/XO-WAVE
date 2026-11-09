@@ -41,7 +41,9 @@ public:
     bool open(const char* clientName, std::string& err);
     void close();
     // Non-blocking: drains pending events into the synth. channel 0 = omni, 1-16.
-    int poll(Synth& synth, int channel);  // returns number of MIDI events
+    // tap (optional): every MIDI message played here, as raw bytes (the Studio link forwards them).
+    using Tap = void (*)(void* ctx, const uint8_t* msg, int len);
+    int poll(Synth& synth, int channel, Tap tap = nullptr, void* tapCtx = nullptr);  // returns number of events
 
 private:
     void connectAll();
