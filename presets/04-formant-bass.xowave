@@ -15,3 +15,4 @@ amp_sustain = 1
 amp_release = 0.1
 lfo_rate = 0.5
 lfo_pos = 0.4
+volume = 0.22

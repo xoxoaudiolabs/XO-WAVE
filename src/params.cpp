@@ -50,7 +50,7 @@ const ParamInfo kParams[P_COUNT] = {
     {"vel_filter", 0, 1, 0.3f, LIN, false, "Velocity -> filter env amount"},
     {"glide", 0, 2, 0, LIN, false, "Portamento time (s)"},
     {"bend_range", 0, 24, 2, LIN, true, "Pitch bend range (semitones)"},
-    {"volume", 0, 1, 0.7f, LIN, false, "Patch volume"},
+    {"volume", 0, 2, 0.7f, LIN, false, "Patch volume (levels presets against each other; master is separate)"},
     {"fx_drive", 0, 1, 0, LIN, false, "FX bus drive (before the effects)"},
     {"chorus_mix", 0, 1, 0, LIN, false, "Chorus amount"},
     {"chorus_rate", 0.05f, 5, 0.5f, EXP, false, "Chorus rate (Hz)"},

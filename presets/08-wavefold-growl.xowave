@@ -16,3 +16,4 @@ lfo_shape = 1
 lfo_pos = 0.7
 lfo_cutoff = 0.2
 amp_release = 0.25
+volume = 0.43
