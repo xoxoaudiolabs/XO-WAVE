@@ -8,6 +8,7 @@ UNAME_M := $(shell uname -m)
 CXXFLAGS ?= -O3 -ffast-math -funroll-loops
 CXXFLAGS += -std=c++17 -Wall -Wextra -MMD -MP
 LVGL_FLAGS := -DLV_CONF_INCLUDE_SIMPLE -Isrc -Ithird_party/lvgl
+CXXFLAGS += -DXO_VERSION=\"$(shell cat VERSION 2>/dev/null || echo dev)\"
 CFLAGS ?= -O2
 CFLAGS += -MMD -MP $(LVGL_FLAGS)
 LDLIBS :=
@@ -21,7 +22,7 @@ ifeq ($(UNAME_M),armv7l)
   CFLAGS += -mcpu=cortex-a53 -mfpu=neon-fp-armv8 -mfloat-abi=hard
 endif
 
-SRCS := src/main.cpp src/synth.cpp src/wavetable.cpp src/params.cpp src/config.cpp src/fx.cpp src/studio_link.cpp src/ui/ui.cpp
+SRCS := src/main.cpp src/synth.cpp src/wavetable.cpp src/params.cpp src/config.cpp src/fx.cpp src/studio_link.cpp src/web.cpp src/ui/ui.cpp
 LVGL_SRCS := $(shell find third_party/lvgl/src -name '*.c')
 
 ifeq ($(UNAME_S),Linux)

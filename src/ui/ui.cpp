@@ -1168,6 +1168,11 @@ void showTempo() {
     if (!S->tempoLabel || !S->cfg.status) return;
     bool ext = S->cfg.status->extClock.load();
     float bpm = ext ? S->cfg.status->bpmNow.load() : S->cfg.status->tempo.load();
+    if (!ext) {   // changed from the web app: remember it
+        std::string t = std::to_string(static_cast<int>(std::lround(bpm)));
+        auto it = S->stateKv.find("tempo");
+        if (it == S->stateKv.end() ? std::lround(bpm) != 120 : it->second != t) markState("tempo", t);
+    }
     if (bpm == S->tempoShown && ext == S->extShown) return;
     S->tempoShown = bpm;
     S->extShown = ext;

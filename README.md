@@ -97,6 +97,10 @@ The screen calibrates itself the first time XO-Wave starts: tap the four targets
 
 The UI uses [LVGL](https://lvgl.io) (MIT), with the **Anton** and **IBM Plex Mono** fonts (SIL Open Font License, see `fonts/`).
 
+## Web app (phone or computer)
+
+Open **http://xo-wave.local** on anything on the same network (or the cable): every parameter grouped like the touchscreen pages, presets (◀ ▶ and a list), master volume, tempo and a one-octave keyboard, in the XOXO look. Changes show on the touchscreen too, and the page follows changes made on XO-Wave. It's plain HTTP with no password, like XOXO Studio's web page: anyone on the network can use it. Turn it off with `web.enabled = off`.
+
 ## Tempo and MIDI clock
 
 XO-Wave follows MIDI clock from a linked Studio (timed by the Studio's own timestamps, so it locks to the exact tempo) or a USB device, including start/stop; the synced delay, LFO and arpeggiator follow it. With no clock coming in, it runs on its own tempo, set on the PLAY page and remembered.

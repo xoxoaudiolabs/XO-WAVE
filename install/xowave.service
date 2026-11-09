@@ -13,6 +13,8 @@ ExecStartPre=+/bin/sh -c 'for v in /sys/class/vtconsole/vtcon*; do grep -q "fram
 ExecStart=/opt/xowave/xowave -c /etc/xowave.conf
 Restart=always
 RestartSec=2
+# The web app on port 80 (http://xo-wave.local).
+AmbientCapabilities=CAP_NET_BIND_SERVICE
 LimitRTPRIO=95
 LimitMEMLOCK=infinity
 Nice=-10

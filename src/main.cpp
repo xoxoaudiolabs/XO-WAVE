@@ -14,6 +14,7 @@
 
 #include "config.h"
 #include "studio_link.h"
+#include "web.h"
 #include "synth.h"
 #include "ui/ui.h"
 #include "wavetable.h"
@@ -67,13 +68,18 @@ static void applyCcMap(Synth& synth, const KeyValues& conf) {
 
 static PresetBank gBank;
 static EngineStatus gStatus;
-static CommandQueue gCmds;
+static CommandQueue gCmds;      // from the touchscreen
+static CommandQueue gWebCmds;   // from the web app (a queue of its own: one producer each)
+
+#ifndef XO_VERSION
+#define XO_VERSION "dev"
+#endif
 
 // Applies commands from the touchscreen UI (called on the audio thread).
 // Notes played on the screen go to a linked Studio too.
-static void drainCommands(Synth& synth, StudioLink* link = nullptr) {
+static void drainCommands(Synth& synth, StudioLink* link = nullptr, CommandQueue& queue = gCmds) {
     Cmd c;
-    while (gCmds.pop(c)) {
+    while (queue.pop(c)) {
         switch (c.type) {
             case CmdType::SetParam: synth.setParam(c.a, c.b); break;
             case CmdType::NoteOn: {
@@ -366,6 +372,27 @@ static int runLive(const KeyValues& conf, const std::vector<Wavetable>& tables, 
         if (gStatus.paramSerial.load() != saved) save();  // final save on shutdown
     });
 
+    // Web app (http://<hostname>.local), normal priority.
+    WebServer web;
+    if (kvGet(conf, "web.enabled", "on") != "off") {
+        WebConfig wc;
+        wc.cmds = &gWebCmds;
+        wc.status = &gStatus;
+        wc.bank = &gBank;
+        wc.tables = &tables;
+        wc.fontsDir = kvGet(conf, "ui.fonts", "/opt/xowave/fonts");
+        wc.version = XO_VERSION;
+        wc.port = kvGetInt(conf, "web.port", 80);
+        if (web.start(wc)) {
+            char host[64] = "xowave";
+            gethostname(host, sizeof host - 1);
+            std::fprintf(stderr, "xowave: web app on http://%s.local%s\n", host,
+                         web.port() == 80 ? "" : (":" + std::to_string(web.port())).c_str());
+        } else {
+            std::fprintf(stderr, "xowave: web app couldn't open a port\n");
+        }
+    }
+
     goRealtime(kvGetInt(conf, "audio.priority", 70));
     enableFlushToZero();
 
@@ -379,6 +406,7 @@ static int runLive(const KeyValues& conf, const std::vector<Wavetable>& tables, 
     float cpu = 0;
     while (gRunning && gStatus.running.load(std::memory_order_relaxed)) {
         drainCommands(*synth, &link);
+        drainCommands(*synth, &link, gWebCmds);
         const int ch = gStatus.midiChannel.load(std::memory_order_relaxed);
         int ev = midi.poll(*synth, ch, [](void* l, const uint8_t* m, int n) { static_cast<StudioLink*>(l)->pushMidiOut(m, n); },
                            &link);
@@ -413,6 +441,7 @@ static int runLive(const KeyValues& conf, const std::vector<Wavetable>& tables, 
         }
     }
     std::fprintf(stderr, "xowave: stopping\n");
+    web.stop();
     if (uiRunning) uiStop();
     saverQuit = true;
     saver.join();
