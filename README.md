@@ -144,6 +144,12 @@ The OSC page's **SUB** view has a sub oscillator (sine or square, one or two oct
 
 Built-in tables: Basic Shapes (sine→tri→saw→square), PWM, Sync Saw, Formant, FM, Wavefold, Organ, Digital, Harmonic Sweep, Grit.
 
+## Updates
+
+**SETTINGS → SYSTEM → UPDATE** checks [xoxoaudiolabs/XO-WAVE](https://github.com/xoxoaudiolabs/XO-WAVE) for a newer version; **INSTALL** fetches it, builds and tests it on the Pi, installs it and restarts XO-Wave (a few minutes). If the build or tests fail nothing changes, and if the new version won't start the old one is put back. Your settings, presets and session are kept.
+
+The repo is private, so each Pi uses its own **read-only deploy key** (`/etc/xowave/deploy_key`). The installer creates it and prints the public key; add it at *github.com/xoxoaudiolabs/XO-WAVE → Settings → Deploy keys* (leave "Allow write access" off). From a terminal: `sudo xowave-update check` / `sudo xowave-update install`; progress is in `/var/lib/xowave/update.log`.
+
 ## Troubleshooting
 
 | Problem | Fix |

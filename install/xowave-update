@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+# XO-Wave updates from the private GitHub repo, with this Pi's read-only deploy key.
+#   xowave-update check     is there a newer version? (prints one line)
+#   xowave-update install   fetch, build, test, install, restart; rolls back if it won't start
+#   xowave-update key       print this Pi's public key (add it to the repo as a read-only deploy key)
+# Runs as root (sudo, or xowave-update.service). Progress goes to /var/lib/xowave/update.log.
+set -uo pipefail
+REPO=git@github.com:xoxoaudiolabs/XO-WAVE.git
+SRC=/opt/xowave/src
+KEY=/etc/xowave/deploy_key
+LOG=/var/lib/xowave/update.log
+export GIT_SSH_COMMAND="ssh -i $KEY -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=15 -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/etc/xowave/known_hosts"
+export PATH="$PATH:/usr/sbin:/sbin"
+
+say() { echo "$*"; [[ ${LOGGING:-0} == 1 ]] && echo "$*" >> "$LOG"; }
+installed() { cat /opt/xowave/VERSION 2>/dev/null || echo "?"; }
+
+fetch() {
+    if [[ ! -f $KEY ]]; then say "ERROR: NO DEPLOY KEY ($KEY)"; return 1; fi
+    if [[ -d $SRC/.git ]]; then
+        git -C "$SRC" fetch -q origin main 2>>"$LOG.err" || { say "ERROR: CAN'T REACH GITHUB"; return 1; }
+    else
+        rm -rf "$SRC"
+        git clone -q --branch main "$REPO" "$SRC" 2>>"$LOG.err" || { say "ERROR: CAN'T REACH GITHUB (OR THE KEY ISN'T ADDED)"; return 1; }
+    fi
+}
+
+case ${1:-check} in
+key)
+    if [[ ! -f $KEY ]]; then
+        install -d -m700 /etc/xowave
+        ssh-keygen -q -t ed25519 -N "" -C "xowave@$(hostname)" -f "$KEY"
+    fi
+    cat "$KEY.pub"
+    ;;
+check)
+    fetch || exit 1
+    new=$(git -C "$SRC" show origin/main:VERSION 2>/dev/null || echo "?")
+    have=$(installed)
+    head=$(git -C "$SRC" rev-parse --short origin/main)
+    if [[ -f /opt/xowave/COMMIT && $(cat /opt/xowave/COMMIT) == "$head" ]]; then
+        echo "UP TO DATE: $have ($head)"
+    else
+        echo "UPDATE AVAILABLE: $new ($head), INSTALLED $have"
+    fi
+    ;;
+install)
+    LOGGING=1
+    : > "$LOG"
+    say "FETCHING..."
+    fetch || exit 1
+    git -C "$SRC" reset -q --hard origin/main
+    head=$(git -C "$SRC" rev-parse --short HEAD)
+    say "BUILDING $(cat "$SRC/VERSION") ($head)... (A FEW MINUTES)"
+    if ! make -C "$SRC" -j4 >>"$LOG.err" 2>&1; then say "ERROR: BUILD FAILED. NOTHING CHANGED."; exit 1; fi
+    say "TESTING..."
+    if ! make -C "$SRC" test >>"$LOG.err" 2>&1; then say "ERROR: TESTS FAILED. NOTHING CHANGED."; exit 1; fi
+    say "INSTALLING..."
+    cp -f /opt/xowave/xowave /opt/xowave/xowave.prev 2>/dev/null
+    RUN_USER=$(stat -c %U /var/lib/xowave)
+    if ! SUDO_USER="$RUN_USER" "$SRC/install/setup.sh" --update >>"$LOG.err" 2>&1; then
+        say "ERROR: INSTALL FAILED. PUTTING THE OLD VERSION BACK."
+        cp -f /opt/xowave/xowave.prev /opt/xowave/xowave; systemctl restart xowave; exit 1
+    fi
+    sleep 20
+    if ! systemctl is-active -q xowave; then
+        say "ERROR: THE NEW VERSION DIDN'T START. PUT THE OLD ONE BACK."
+        cp -f /opt/xowave/xowave.prev /opt/xowave/xowave; systemctl restart xowave; exit 1
+    fi
+    echo "$head" > /opt/xowave/COMMIT
+    say "DONE: $(installed) ($head)"
+    ;;
+*) sed -n '2,6p' "$0"; exit 1 ;;
+esac

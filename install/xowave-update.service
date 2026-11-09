@@ -1,0 +1,7 @@
+[Unit]
+Description=XO-Wave update (fetch, build, test, install)
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/xowave-update install

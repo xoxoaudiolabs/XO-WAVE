@@ -24,6 +24,7 @@ struct UiConfig {
     unsigned rate = 48000, period = 128, periods = 3;
 
     std::string fontsDir;      // Anton + IBM Plex Mono .ttf files
+    std::string version;       // shown on SETTINGS > SYSTEM
 
     // XOXO Studio link (called on the UI thread).
     std::function<std::string()> linkDescribe;

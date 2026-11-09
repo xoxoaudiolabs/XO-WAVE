@@ -12,11 +12,14 @@ HERE="$(cd "$(dirname "$0")/.." && pwd)"
 RUN_USER="${SUDO_USER:-pi}"
 NO_WIFI=0
 NO_SCREEN=0
+UPDATE=0   # --update: called by xowave-update after it built and tested (no apt, no build)
 for a in "$@"; do
+    [[ $a == --update ]] && UPDATE=1
     [[ $a == --no-wifi ]] && NO_WIFI=1
     [[ $a == --no-screen ]] && NO_SCREEN=1
 done
 
+if [[ $UPDATE == 0 ]]; then
 echo "==> Installing packages"
 apt-get update
 apt-get install -y build-essential libasound2-dev alsa-utils bluez rfkill
@@ -27,10 +30,12 @@ fi
 echo "==> Building XO-Wave"
 sudo -u "$RUN_USER" make -C "$HERE" -j4
 sudo -u "$RUN_USER" make -C "$HERE" test
+fi
 
 echo "==> Installing to /opt/xowave"
 install -d /opt/xowave/presets /opt/xowave/wavetables /opt/xowave/fonts
 install -m755 "$HERE/xowave" /opt/xowave/xowave
+cp "$HERE/VERSION" /opt/xowave/VERSION 2>/dev/null || true
 ln -sf /opt/xowave/xowave /usr/local/bin/xowave
 cp -n "$HERE"/presets/*.xowave /opt/xowave/presets/          # never overwrite saved edits
 cp "$HERE"/wavetables/*.wav /opt/xowave/wavetables/ 2>/dev/null || true
@@ -45,10 +50,13 @@ else
 fi
 install -m755 "$HERE/install/xowave-bt" /usr/local/bin/xowave-bt
 install -m755 "$HERE/install/xowave-bt-keeper" /usr/local/bin/xowave-bt-keeper
+install -m755 "$HERE/install/xowave-update" /usr/local/bin/xowave-update
+install -m644 "$HERE/install/xowave-update.service" /etc/systemd/system/xowave-update.service
+touch /var/lib/xowave/update.log /var/lib/xowave/update.log.err 2>/dev/null; chmod 644 /var/lib/xowave/update.log* 2>/dev/null || true
 usermod -aG audio,bluetooth,input,video "$RUN_USER"
 
 # Let the touchscreen run the Bluetooth helper, reboot and power off.
-echo "$RUN_USER ALL=(root) NOPASSWD: /usr/local/bin/xowave-bt, /usr/sbin/reboot, /usr/sbin/poweroff" > /etc/sudoers.d/xowave
+echo "$RUN_USER ALL=(root) NOPASSWD: /usr/local/bin/xowave-bt, /usr/sbin/reboot, /usr/sbin/poweroff, /usr/local/bin/xowave-update check, /usr/local/bin/xowave-update key, /usr/bin/systemctl start --no-block xowave-update.service" > /etc/sudoers.d/xowave
 chmod 440 /etc/sudoers.d/xowave
 visudo -cf /etc/sudoers.d/xowave >/dev/null || { echo "!! sudoers rule invalid, removing"; rm -f /etc/sudoers.d/xowave; }
 
@@ -101,6 +109,15 @@ systemctl enable --now xowave-bt-keeper
 systemctl enable xowave
 systemctl restart xowave
 
+if [[ $UPDATE == 0 ]]; then
+cat <<EOF
+
+Updates: add this Pi's key to github.com/xoxoaudiolabs/XO-WAVE > Settings > Deploy keys
+(read-only), then use SETTINGS > SYSTEM > UPDATE on the screen:
+  $(/usr/local/bin/xowave-update key)
+EOF
+fi
+[[ $UPDATE == 1 ]] && exit 0
 cat <<EOF
 
 XO-Wave installed and running.

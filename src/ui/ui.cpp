@@ -170,6 +170,14 @@ struct State {
     lv_obj_t* usbRestart = nullptr;
     int usbImportedTables = 0;
 
+    // Updates
+    lv_obj_t* updStatus = nullptr;
+    lv_obj_t* updInstall = nullptr;
+    std::mutex updMutex;
+    std::string updResult;
+    std::atomic<int> updState{0};   // 0 idle, 1 checking, 2 result ready, 3 installing
+    uint32_t updNextLog = 0;
+
     // Undo / compare
     std::vector<std::array<float, P_COUNT>> undo;
     std::array<float, P_COUNT> stable{};
@@ -1400,6 +1408,8 @@ void closeModal() {
     S->textArea = nullptr;
     S->btList = nullptr;
     S->btStatus = nullptr;
+    S->updStatus = nullptr;
+    S->updInstall = nullptr;
 }
 
 void saveAsKeyboard(lv_event_t* e) {
@@ -1991,9 +2001,10 @@ void updateSystemInfo() {
                   "%u\n"
                   "%u EVENTS\n"
                   "%d PLAYING\n"
+                  "%s\n"
                   "%s",
                   S->cfg.rate, S->cfg.period, st ? st->cpu.load() * 100.0 : 0.0, tbuf, st ? st->xruns.load() : 0u,
-                  st ? st->midiEvents.load() : 0u, st ? st->voices.load() : 0, ipAddress().c_str());
+                  st ? st->midiEvents.load() : 0u, st ? st->voices.load() : 0, ipAddress().c_str(), S->cfg.version.c_str());
     lv_label_set_text(S->sysInfo, buf);
     if (S->btSpeakerLabel) {
         std::string bt = S->cfg.btDevice.empty() ? "NONE PAIRED"
@@ -2460,25 +2471,102 @@ void doReboot(lv_event_t*) {
 }
 void rebootEvent(lv_event_t*) { confirmAction("Reboot the Pi?", "REBOOT", doReboot); }
 
+// UPDATE: from the private GitHub repo with this Pi's read-only deploy key (xowave-update).
+void updCheck(lv_event_t*) {
+    if (S->updState.load() == 1 || S->updState.load() == 3) return;
+    if (S->updStatus) lv_label_set_text(S->updStatus, "CHECKING GITHUB...");
+    if (S->updInstall) lv_obj_add_flag(S->updInstall, LV_OBJ_FLAG_HIDDEN);
+    S->updState = 1;
+    std::thread([] {
+        std::string out;
+        FILE* f = popen("sudo -n /usr/local/bin/xowave-update check 2>&1", "r");
+        if (f) { char line[256]; while (std::fgets(line, sizeof line, f)) out += line; pclose(f); }
+        while (!out.empty() && (out.back() == '\n' || out.back() == ' ')) out.pop_back();
+        size_t nl = out.find_last_of('\n');
+        if (nl != std::string::npos) out = out.substr(nl + 1);
+        if (out.empty()) out = "ERROR: COULDN'T RUN THE UPDATER";
+        std::lock_guard<std::mutex> lock(S->updMutex);
+        S->updResult = out;
+        S->updState = 2;
+    }).detach();
+}
+
+void updInstallEvent(lv_event_t*) {
+    int rc = std::system("sudo -n /usr/bin/systemctl start --no-block xowave-update.service");
+    (void)rc;
+    S->updState = 3;
+    S->updNextLog = 0;
+    if (S->updInstall) lv_obj_add_flag(S->updInstall, LV_OBJ_FLAG_HIDDEN);
+    if (S->updStatus) lv_label_set_text(S->updStatus, "STARTING...");
+}
+
+void pollUpdate() {
+    if (!S->updStatus) return;
+    if (S->updState.load() == 2) {
+        S->updState = 0;
+        std::lock_guard<std::mutex> lock(S->updMutex);
+        lv_label_set_text(S->updStatus, S->updResult.c_str());
+        bool avail = S->updResult.rfind("UPDATE AVAILABLE", 0) == 0;
+        if (avail) lv_obj_remove_flag(S->updInstall, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_style_text_color(S->updStatus, C(avail ? kSignal : kText), 0);
+    } else if (S->updState.load() == 3 && static_cast<int32_t>(tickMs() - S->updNextLog) >= 0) {
+        S->updNextLog = tickMs() + 1000;   // the updater's progress (XO-Wave restarts when it's done)
+        std::string last;
+        std::ifstream f("/var/lib/xowave/update.log");
+        for (std::string line; std::getline(f, line);) if (!line.empty()) last = line;
+        if (!last.empty()) lv_label_set_text(S->updStatus, last.c_str());
+    }
+}
+
+void openUpdate(lv_event_t*) {
+    modalBase(440, 220);
+    lv_obj_t* box = modalBox();
+    lv_obj_t* t = label(box, "UPDATE", fBig, kText);
+    lv_obj_align(t, LV_ALIGN_TOP_LEFT, 6, 0);
+    lv_obj_t* v = label(box, "", fLabel, kDim);
+    lv_label_set_text_fmt(v, "INSTALLED: %s", S->cfg.version.empty() ? "?" : S->cfg.version.c_str());
+    lv_obj_align(v, LV_ALIGN_TOP_LEFT, 6, 38);
+    S->updStatus = label(box, "", fSmall, kText);
+    lv_obj_set_width(S->updStatus, 420);
+    lv_label_set_long_mode(S->updStatus, LV_LABEL_LONG_WRAP);
+    lv_obj_align(S->updStatus, LV_ALIGN_TOP_LEFT, 6, 64);
+    lv_obj_t* note = label(box, "FROM XOXOAUDIOLABS/XO-WAVE ON GITHUB. IT BUILDS AND TESTS FIRST, AND PUTS THE OLD VERSION "
+                                "BACK IF THE NEW ONE WON'T START. XO-WAVE RESTARTS WHEN IT'S DONE.", fLabel, kDim);
+    lv_obj_set_width(note, 420);
+    lv_label_set_long_mode(note, LV_LABEL_LONG_WRAP);
+    lv_obj_align(note, LV_ALIGN_TOP_LEFT, 6, 104);
+    lv_obj_t* r = row(box, 420, 40);
+    lv_obj_align(r, LV_ALIGN_BOTTOM_MID, 0, -2);
+    lv_obj_set_flex_align(r, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    button(r, LV_SYMBOL_REFRESH " CHECK", 120, 38, updCheck);
+    S->updInstall = button(r, LV_SYMBOL_DOWNLOAD " INSTALL", 140, 38, updInstallEvent);
+    lv_obj_set_style_bg_color(S->updInstall, C(kSignal), 0);
+    lv_obj_set_style_border_color(S->updInstall, C(kSignal), 0);
+    lv_obj_set_style_text_color(S->updInstall, C(kBg), 0);
+    lv_obj_add_flag(S->updInstall, LV_OBJ_FLAG_HIDDEN);
+    button(r, "CLOSE", 100, 38, modalCancel);
+    updCheck(nullptr);
+}
+
 void buildSystemSection(lv_obj_t* p) {
     sectionTitle(p, "SYSTEM");
     lv_obj_t* box = lv_obj_create(p);
     lv_obj_remove_style_all(box);
-    lv_obj_set_size(box, 346, 116);
+    lv_obj_set_size(box, 346, 132);
     lv_obj_remove_flag(box, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_t* keys = label(box, "AUDIO\nCPU / TEMP\nXRUNS\nMIDI\nVOICES\nIP", fLabel, kDim);
+    lv_obj_t* keys = label(box, "AUDIO\nCPU / TEMP\nXRUNS\nMIDI\nVOICES\nIP\nVERSION", fLabel, kDim);
     lv_obj_set_style_text_line_space(keys, 6, 0);
     S->sysInfo = label(box, "", fSmall, kText);
     lv_obj_set_style_text_line_space(S->sysInfo, 4, 0);
     lv_obj_set_pos(S->sysInfo, 100, 0);
     lv_obj_t* r = row(p, 346, 44);
     lv_obj_set_flex_align(r, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    button(r, LV_SYMBOL_REFRESH " RESTART", 110, 38, restartEvent);
-    button(r, "REBOOT", 104, 38, rebootEvent);
-    lv_obj_t* off = button(r, LV_SYMBOL_POWER " OFF", 110, 38, shutdownEvent);
+    button(r, "UPDATE", 84, 38, openUpdate);
+    button(r, "RESTART", 84, 38, restartEvent);
+    button(r, "REBOOT", 80, 38, rebootEvent);
+    lv_obj_t* off = button(r, LV_SYMBOL_POWER " OFF", 80, 38, shutdownEvent);
     lv_obj_set_style_border_color(off, C(kSignal), 0);
     lv_obj_set_style_text_color(off, C(kSignal), 0);
-    label(p, "BUILT BY HAND. PLAYED LOUD.", fLabel, kDim);
 }
 
 void settingsNavEvent(lv_event_t* e) {
@@ -2885,6 +2973,7 @@ void syncFromEngine() {
     if (static_cast<int32_t>(now - S->sysNext) >= 0) { S->sysNext = now + 1000; updateSystemInfo(); updateLinkUi(); }
     if (S->btState.load() == 2) { S->btState = 0; showBtResults(); }
     pollLearn();
+    pollUpdate();
     showTempo();
     trackUndo();
     if (S->xyPad && serial != S->lastSerialXy) { S->lastSerialXy = serial; showXy(); }
@@ -3384,6 +3473,13 @@ bool uiSnapshot(const UiConfig& cfg, const std::string& dir) {
         shot("8-usb");
         closeModal();
     }
+    openUpdate(nullptr);
+    S->updState = 0;
+    lv_label_set_text(S->updStatus, "UPDATE AVAILABLE: 0.3.1 (a1b2c3d), INSTALLED 0.3.0");
+    lv_obj_set_style_text_color(S->updStatus, C(kSignal), 0);
+    lv_obj_remove_flag(S->updInstall, LV_OBJ_FLAG_HIDDEN);
+    shot("8-update");
+    closeModal();
     openXy(nullptr);
     shot("8-xy-pad");
     xyClose(nullptr);
