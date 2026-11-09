@@ -11,6 +11,26 @@ s = netmidi.Session("XOXO Studio on fakehost", 15004, lambda m: got.append(bytes
 s.start()
 threading.Thread(target=s.run, daemon=True).start()
 
+def send_return():
+    """the Studio's mix back to XO-Wave: a 330 Hz tone, RTP L16 stereo, 310-frame packets, to UDP 46016"""
+    while not s.names():
+        time.sleep(0.05)
+    out = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    seq, ts, ph, t0 = 0, 0, 0.0, time.time()
+    for k in range(int(4 / 0.0064583)):
+        frames = []
+        for _ in range(310):
+            v = int(0.25 * 32767 * math.sin(ph))
+            frames.append(struct.pack(">hh", v, v))
+            ph += 2 * math.pi * 330 / 48000
+        out.sendto(struct.pack(">BBHII", 0x80, 127, seq & 0xFFFF, ts & 0xFFFFFFFF, 1234) + b"".join(frames),
+                   ("127.0.0.1", 46016))
+        seq += 1
+        ts += 310
+        time.sleep(max(0.0, t0 + (k + 1) * 310 / 48000 - time.time()))
+
+threading.Thread(target=send_return, daemon=True).start()
+
 rtp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 rtp.bind(("0.0.0.0", 46030))
 rtp.settimeout(0.2)

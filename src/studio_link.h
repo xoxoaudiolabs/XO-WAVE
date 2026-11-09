@@ -40,6 +40,7 @@ public:
         std::string host = "auto";  // "auto" = find by DNS-SD, else a Studio's address
         int port = 5004;            // the Studio's network MIDI control port (with host)
         int audioPort = 46030;      // the Studio's XO-WAVE receiver
+        int returnPort = 46016;     // where the Studio sends its mix back (less XO-WAVE)
         std::string name;           // our session name ("XO-Wave on <host>")
     };
 
@@ -62,6 +63,9 @@ public:
     void sendAudio(const float* left, const float* right, int n);
     bool popMidiIn(MidiMsg& m) { return in_.pop(m); }
     void pushMidiOut(const uint8_t* msg, int len);
+    // Adds the Studio's mix (mix-minus) to left/right at gain; for the jack only.
+    void mixReturn(float* left, float* right, int n, float gain);
+    bool returnPlaying() const { return retPlaying_; }
 
 private:
     void run();
@@ -71,6 +75,7 @@ private:
     void received(const uint8_t* p, int len, bool dataPort);
     void sendSync(int count, uint64_t t1, uint64_t t2);
     void flushMidiOut();
+    void receiveReturn();
     void leave(const char* why);
     void setStatus(const std::string& s);
     void checkStudio();   // GET /api/status: does this Studio take XO-Wave's sound?
@@ -85,7 +90,7 @@ private:
     mutable std::mutex mu_;
     std::string peerName_, peerAddr_, status_ = "OFF";
 
-    int ctl_ = -1, data_ = -1, audio_ = -1;
+    int ctl_ = -1, data_ = -1, audio_ = -1, ret_ = -1;
     sockaddr_in peerCtl_{}, peerData_{};
     uint32_t ssrc_ = 0, peerSsrc_ = 0;
     uint16_t midiSeq_ = 0;
@@ -99,6 +104,11 @@ private:
     int fill_ = 0;
     uint16_t rtpSeq_ = 0;
     uint32_t rtpTs_ = 0, audioSsrc_ = 0;
+
+    // The Studio's mix back: link thread -> ring -> audio thread (drift-corrected).
+    StereoRing retRing_{16384};
+    bool retPlaying_ = false;
+    double retFrac_ = 0, retErr_ = 0;
 
     SpscQueue<MidiMsg, 512> in_;    // Studio -> synth
     SpscQueue<MidiMsg, 512> out_;   // local playing -> Studio

@@ -10,6 +10,7 @@
 #include <atomic>
 #include <cstdint>
 #include <cstring>
+#include <vector>
 
 #include "params.h"
 
@@ -50,6 +51,38 @@ private:
 
 using CommandQueue = SpscQueue<Cmd, 1024>;
 
+// Lock-free stereo ring buffer: one producer, one consumer.
+class StereoRing {
+public:
+    explicit StereoRing(size_t framesPow2 = 32768) : buf_(framesPow2 * 2), mask_(framesPow2 - 1) {}
+    size_t capacity() const { return mask_ + 1; }
+    size_t available() const { return w_.load(std::memory_order_acquire) - r_.load(std::memory_order_acquire); }
+
+    // Producer (real-time thread). Drops what doesn't fit.
+    void push(const float* l, const float* r, size_t n) {
+        size_t wi = w_.load(std::memory_order_relaxed);
+        size_t ri = r_.load(std::memory_order_acquire);
+        size_t space = capacity() - (wi - ri);
+        if (n > space) n = space;
+        for (size_t i = 0; i < n; ++i) {
+            size_t idx = (wi + i) & mask_;
+            buf_[2 * idx] = l[i];
+            buf_[2 * idx + 1] = r[i];
+        }
+        w_.store(wi + n, std::memory_order_release);
+    }
+
+    // Consumer side.
+    const float* at(size_t offset) const { return &buf_[2 * ((r_.load(std::memory_order_relaxed) + offset) & mask_)]; }
+    void advance(size_t n) { r_.store(r_.load(std::memory_order_relaxed) + n, std::memory_order_release); }
+    void clear() { r_.store(w_.load(std::memory_order_acquire), std::memory_order_release); }
+
+private:
+    std::vector<float> buf_;
+    size_t mask_;
+    std::atomic<size_t> w_{0}, r_{0};
+};
+
 struct EngineStatus {
     std::array<std::atomic<float>, P_COUNT> param{};  // current target values
     std::atomic<float> peakL{0}, peakR{0};             // max since UI last read
@@ -68,6 +101,7 @@ struct EngineStatus {
     std::atomic<int> midiChannel{0};   // 0 = omni, 1..16
     std::atomic<float> master{0.8f};
     std::atomic<int> linkState{0};
+    std::atomic<float> returnLevel{0.8f}; // the Studio's mix in XO-Wave's headphones (jack), 0..1
     std::atomic<float> tempo{120.0f};  // internal tempo (BPM), set on the screen; used without MIDI clock
     std::atomic<float> bpmNow{120.0f}; // tempo in use (MIDI clock's when it's arriving)
     std::atomic<bool> extClock{false}; // following MIDI clock (the Studio's or a USB device's)     // XOXO Studio link: 0 off, 1 searching, 2 linked   // master volume 0..1 (fader position), global, not per preset

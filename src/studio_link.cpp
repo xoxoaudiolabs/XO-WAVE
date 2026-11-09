@@ -302,6 +302,16 @@ void StudioLink::start(const Config& cfg) {
     ctl_ = udpSocket();
     data_ = udpSocket();
     audio_ = udpSocket();
+    ret_ = ::socket(AF_INET, SOCK_DGRAM, 0);   // the Studio's mix back, on a known port
+    if (ret_ >= 0) {
+        int one = 1;
+        setsockopt(ret_, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
+        sockaddr_in a{};
+        a.sin_family = AF_INET;
+        a.sin_addr.s_addr = htonl(INADDR_ANY);
+        a.sin_port = htons(static_cast<uint16_t>(cfg.returnPort));
+        if (::bind(ret_, reinterpret_cast<sockaddr*>(&a), sizeof a) != 0) { ::close(ret_); ret_ = -1; }
+    }
     if (ctl_ < 0 || data_ < 0 || audio_ < 0) {
         setStatus("NO NETWORK SOCKETS");
         return;
@@ -314,7 +324,7 @@ void StudioLink::stop() {
     if (!running_.exchange(false)) return;
     if (thread_.joinable()) thread_.join();
     leave("stopped");
-    for (int* s : {&ctl_, &data_, &audio_}) {
+    for (int* s : {&ctl_, &data_, &audio_, &ret_}) {
         if (*s >= 0) ::close(*s);
         *s = -1;
     }
@@ -570,16 +580,83 @@ void StudioLink::run() {
         }
         if (now >= nextCheck_) { checkStudio(); nextCheck_ = now + 30; }
         flushMidiOut();
-        pollfd p[2] = {{ctl_, POLLIN, 0}, {data_, POLLIN, 0}};
-        if (::poll(p, 2, 2) > 0) {
+        pollfd p[3] = {{ctl_, POLLIN, 0}, {data_, POLLIN, 0}, {ret_, POLLIN, 0}};
+        if (::poll(p, ret_ >= 0 ? 3 : 2, 2) > 0) {
             for (int k = 0; k < 2; ++k) {
                 if (!(p[k].revents & POLLIN)) continue;
                 uint8_t buf[1500];
                 ssize_t n = ::recv(p[k].fd, buf, sizeof buf, 0);
                 if (n > 0) received(buf, static_cast<int>(n), k == 1);
             }
+            if (ret_ >= 0 && (p[2].revents & POLLIN)) receiveReturn();
         }
     }
+}
+
+// Link thread: the Studio's mix (RTP L16 S16BE stereo 48 kHz, any packet size), only
+// from the linked Studio, into the ring.
+void StudioLink::receiveReturn() {
+    uint8_t buf[2048];
+    sockaddr_in from{};
+    socklen_t fl = sizeof from;
+    ssize_t n;
+    while ((n = ::recvfrom(ret_, buf, sizeof buf, MSG_DONTWAIT, reinterpret_cast<sockaddr*>(&from), &fl)) > 0) {
+        if (state_.load() != Linked || from.sin_addr.s_addr != audioDest_.load()) continue;
+        if (n < 12 || (buf[0] & 0xC0) != 0x80) continue;
+        int head = 12 + 4 * (buf[0] & 0x0F);
+        if ((buf[0] & 0x10) && n >= head + 4) head += 4 + 4 * get16(buf + head + 2);   // header extension
+        int frames = (static_cast<int>(n) - head) / 4;
+        if (frames <= 0) continue;
+        float l[512], r[512];
+        frames = std::min(frames, 512);
+        for (int i = 0; i < frames; ++i) {
+            const uint8_t* p = buf + head + 4 * i;
+            l[i] = static_cast<int16_t>((p[0] << 8) | p[1]) / 32768.0f;
+            r[i] = static_cast<int16_t>((p[2] << 8) | p[3]) / 32768.0f;
+        }
+        retRing_.push(l, r, static_cast<size_t>(frames));
+        fl = sizeof from;
+    }
+}
+
+// Audio thread: plays the ring with a slowly adapting rate (the Studio's clock and
+// ours differ a little), held at ~30 ms; re-primes after an underrun.
+void StudioLink::mixReturn(float* left, float* right, int n, float gain) {
+    if (!linked() || gain <= 0.0001f) {
+        if (retPlaying_) { retPlaying_ = false; retRing_.clear(); }
+        return;
+    }
+    const double target = 1440;   // 30 ms at 48 kHz
+    size_t avail = retRing_.available();
+    if (!retPlaying_) {
+        if (avail < target) return;
+        retRing_.advance(avail - static_cast<size_t>(target));   // start at the target fill
+        avail = static_cast<size_t>(target);
+        retPlaying_ = true;
+        retFrac_ = 0;
+        retErr_ = 0;
+    }
+    if (avail > retRing_.capacity() / 2) {   // fell far behind: catch up
+        retRing_.advance(avail - static_cast<size_t>(target));
+        avail = static_cast<size_t>(target);
+    }
+    double e = std::clamp((static_cast<double>(avail) - target) / target, -1.0, 1.0);
+    retErr_ += (e - retErr_) * 0.01;
+    const double ratio = 1.0 + 0.005 * retErr_;
+    const size_t needed = static_cast<size_t>(retFrac_ + ratio * n) + 2;
+    if (avail < needed) { retPlaying_ = false; return; }   // ran dry: wait for the buffer to refill
+    for (int i = 0; i < n; ++i) {
+        size_t i0 = static_cast<size_t>(retFrac_);
+        float fr = static_cast<float>(retFrac_ - static_cast<double>(i0));
+        const float* a = retRing_.at(i0);
+        const float* b = retRing_.at(i0 + 1);
+        left[i] += gain * (a[0] + fr * (b[0] - a[0]));
+        right[i] += gain * (a[1] + fr * (b[1] - a[1]));
+        retFrac_ += ratio;
+    }
+    size_t adv = static_cast<size_t>(retFrac_);
+    retRing_.advance(adv);
+    retFrac_ -= static_cast<double>(adv);
 }
 
 // Audio thread: float -> S16BE in 310-frame RTP packets to the Studio.

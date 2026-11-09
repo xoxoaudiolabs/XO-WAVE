@@ -2089,6 +2089,20 @@ void linkToggleEvent(lv_event_t*) {
     updateLinkUi();
 }
 
+void returnLevelChange(Stepper* st, int dir) {
+    if (!S->cfg.status) return;
+    int pct = static_cast<int>(std::lround(S->cfg.status->returnLevel.load() * 100));
+    if (dir) {
+        pct = std::clamp(pct + dir * 10, 0, 100);
+        S->cfg.status->returnLevel.store(pct / 100.0f);
+        char buf[16];
+        std::snprintf(buf, sizeof buf, "%.2f", pct / 100.0);
+        markState("link.return_level", buf);
+    }
+    if (pct == 0) lv_label_set_text(st->value, "OFF");
+    else lv_label_set_text_fmt(st->value, "%d%%", pct);
+}
+
 void buildStudioSection(lv_obj_t* p) {
     sectionTitle(p, "STUDIO LINK");
     label(p, "XOXO STUDIO", fLabel, kDim);
@@ -2096,11 +2110,11 @@ void buildStudioSection(lv_obj_t* p) {
     lv_obj_set_width(S->linkLabel, 340);
     lv_label_set_long_mode(S->linkLabel, LV_LABEL_LONG_WRAP);
     lv_obj_set_height(S->linkLabel, 34);
-    S->linkToggle = button(p, "LINK: ON", 160, 38, linkToggleEvent);
+    S->linkToggle = button(p, "LINK: ON", 160, 34, linkToggleEvent);
+    stepper(p, "STUDIO MIX", returnLevelChange);
     lv_obj_t* note = label(p,
-        "PLUG A CABLE STRAIGHT INTO THE STUDIO (OR SHARE ITS NETWORK). XO-WAVE SHOWS AS XO-WAVE IN ITS MIXER, "
-        "AND MIDI GOES BOTH WAYS. WHILE LINKED THE STUDIO IS THE AUDIO OUT: THE JACK STAYS ON FOR HEADPHONES, "
-        "BLUETOOTH PAUSES.", fLabel, kDim);
+        "STUDIO MIX: HOW LOUD THE STUDIO IS IN XO-WAVE'S HEADPHONES. MIDI GOES BOTH WAYS; BLUETOOTH PAUSES "
+        "WHILE LINKED.", fLabel, kDim);
     lv_obj_set_width(note, 340);
     lv_label_set_long_mode(note, LV_LABEL_LONG_WRAP);
     updateLinkUi();

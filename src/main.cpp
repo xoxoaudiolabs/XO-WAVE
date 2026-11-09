@@ -297,6 +297,7 @@ static int runLive(const KeyValues& conf, const std::vector<Wavetable>& tables, 
         lc.host = kvGet(conf, "link.studio", "auto");
         lc.port = kvGetInt(conf, "link.studio_port", 5004);
         lc.audioPort = kvGetInt(conf, "link.port", 46030);
+        lc.returnPort = kvGetInt(conf, "link.return_port", 46016);
         char host[64] = "xowave";
         gethostname(host, sizeof host - 1);
         lc.name = std::string("XO-Wave on ") + host;
@@ -397,6 +398,9 @@ static int runLive(const KeyValues& conf, const std::vector<Wavetable>& tables, 
         gStatus.linkState.store(link.state(), std::memory_order_relaxed);
         if (toStudio) link.sendAudio(L.data(), R.data(), period);
         else bt.push(L.data(), R.data(), static_cast<size_t>(period));
+        // The Studio's mix (less XO-Wave) in XO-Wave's headphones: added after sending, so
+        // it only reaches the jack.
+        link.mixReturn(L.data(), R.data(), period, gStatus.returnLevel.load(std::memory_order_relaxed));
         if (!audio.write(L.data(), R.data(), period)) break;
         frames += static_cast<uint64_t>(period);
         if (frames >= 10ull * audio.rate()) {
@@ -474,7 +478,7 @@ int main(int argc, char** argv) {
         if (!statePath.empty() && readKeyValues(statePath, state)) {
             for (const auto& [k, v] : state) {
                 if (k.rfind("cc.", 0) == 0 || k == "midi.channel" || k == "audio.period" || k == "synth.voices" ||
-                    k == "bluetooth.latency_ms" || k == "master.volume" || k == "link.enabled" || k == "tempo")
+                    k == "bluetooth.latency_ms" || k == "master.volume" || k == "link.enabled" || k == "tempo" || k == "link.return_level")
                     conf[k] = v;
             }
         }
@@ -482,6 +486,7 @@ int main(int argc, char** argv) {
 
     gStatus.master.store(std::clamp(static_cast<float>(std::atof(kvGet(conf, "master.volume", "0.8").c_str())), 0.0f, 1.0f));
     std::fprintf(stderr, "xowave: master volume %.0f%%\n", gStatus.master.load() * 100);
+    gStatus.returnLevel.store(std::clamp(static_cast<float>(std::atof(kvGet(conf, "link.return_level", "0.8").c_str())), 0.0f, 1.0f));
     gStatus.tempo.store(std::clamp(static_cast<float>(std::atof(kvGet(conf, "tempo", "120").c_str())), 30.0f, 300.0f));
 
 #ifndef XO_NO_ALSA

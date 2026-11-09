@@ -24,9 +24,22 @@ int main() {
     float L[480], R[480];
     double ph = 0;
     int got = 0;
-    for (int block = 0; block < 200; ++block) {  // 2 s at 48 kHz in 480-frame periods
+    float retPeak = 0;
+    int retCross = 0, retBlocks = 0;
+    float prev = 0;
+    for (int block = 0; block < 300; ++block) {  // 3 s at 48 kHz in 480-frame periods
         for (int i = 0; i < 480; ++i) { L[i] = R[i] = 0.5f * std::sin(ph); ph += 2 * M_PI * 440 / 48000; }
         link.sendAudio(L, R, 480);
+        float ML[480] = {}, MR[480] = {};
+        link.mixReturn(ML, MR, 480, 1.0f);   // the Studio's mix back
+        if (block >= 150 && link.returnPlaying()) {   // the last 1.5 s
+            ++retBlocks;
+            for (int i = 0; i < 480; ++i) {
+                retPeak = std::max(retPeak, std::fabs(ML[i]));
+                if (prev < 0 && ML[i] >= 0) ++retCross;
+                prev = ML[i];
+            }
+        }
         xo::MidiMsg m;
         while (link.popMidiIn(m)) { std::printf("from Studio: %02X %02X %02X\n", m.b[0], m.b[1], m.b[2]); ++got; }
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
@@ -34,6 +47,8 @@ int main() {
     link.pushMidiOut(off, 3);
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
     std::printf("midi from Studio: %d\n", got);
+    std::printf("mix back from Studio: playing %d of 150 blocks, peak %.3f, %.0f Hz (330)\n", retBlocks, retPeak,
+                retBlocks ? retCross / (retBlocks * 0.01) : 0.0);
     link.stop();
     return 0;
 }
