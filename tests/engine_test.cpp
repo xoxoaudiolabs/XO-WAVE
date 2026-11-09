@@ -226,6 +226,44 @@ int main() {
         check(std::abs(crossings * 2 - 131) <= 3, msg);
     }
 
+    {  // 11. Arpeggiator never gets stuck: HOLD off stops it; switching it on/off with keys held.
+        auto notesIn = [&](Synth& s, int blocks) {
+            std::vector<float> L(64), R(64);
+            int on = 0; bool loud = false;
+            for (int b = 0; b < blocks; ++b) {
+                s.render(L.data(), R.data(), 64);
+                float e = 0;
+                for (int i = 0; i < 64; ++i) e = std::max(e, std::fabs(L[i]));
+                if (!loud && e > 0.02f) { ++on; loud = true; }
+                if (loud && e < 0.002f) loud = false;
+            }
+            return on;
+        };
+        auto setup = [&](Synth& s) {
+            s.setParam(P_ARP_RATE, 3); s.setParam(P_ARP_GATE, 0.5f);
+            s.setParam(P_AMP_A, 0.001f); s.setParam(P_AMP_S, 1); s.setParam(P_AMP_R, 0.003f); s.setParam(P_VEL_AMP, 0);
+        };
+        const int second = static_cast<int>(sr / 64);
+        Synth a(sr, 8, tables); setup(a);
+        a.setParam(P_ARP_MODE, 1); a.setParam(P_ARP_HOLD, 1);
+        a.noteOn(60, 100); a.noteOn(67, 100); notesIn(a, second / 2); a.noteOff(60); a.noteOff(67);
+        int held = notesIn(a, second);
+        a.setParam(P_ARP_HOLD, 0);
+        notesIn(a, 4);
+        int afterHoldOff = notesIn(a, second);
+        Synth b(sr, 8, tables); setup(b);
+        b.noteOn(60, 100); notesIn(b, 10);
+        b.setParam(P_ARP_MODE, 1);
+        int switchedOn = notesIn(b, second);
+        b.setParam(P_ARP_MODE, 0);
+        notesIn(b, 10);
+        int keyStillSounds = b.activeVoices();
+        char msg[160];
+        std::snprintf(msg, sizeof msg, "arp: HOLD keeps %d notes/s, HOLD off -> %d; on with key held -> %d notes/s; off -> key sounds (%d)",
+                      held, afterHoldOff, switchedOn, keyStillSounds);
+        check(held >= 7 && afterHoldOff == 0 && switchedOn >= 7 && keyStillSounds == 1, msg);
+    }
+
     std::printf(failures ? "\n%d check(s) failed\n" : "\nall checks passed\n", failures);
     return failures ? 1 : 0;
 }

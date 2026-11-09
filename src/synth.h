@@ -91,6 +91,7 @@ private:
     bool pickArpNote(int mode, int& note, int& vel);
     void arpAdd(int note, int vel);
     void arpRemove(int note);
+    void arpFollowKeys();   // arp list = the keys held now
 
     float sr_;
     int numVoices_;
@@ -121,6 +122,9 @@ private:
     // Clock: song position in quarter notes, from MIDI clock ticks or the internal tempo.
     double beats_ = 0, tickBeat_ = 0;
     uint64_t samplePos_ = 0, lastTickSample_ = 0;
+    double lastTickTime_ = 0;    // when the last tick really happened (samples; sender-timed when known)
+    double senderOffset_ = 0;    // local time - sender time, smallest seen (the least-delayed tick)
+    bool senderOffsetSet_ = false;
     bool extClock_ = false;
     float extBpm_ = 120.0f, extBpmShown_ = 120.0f;
     static constexpr int kTickWin = 49;   // 2 beats of ticks
@@ -131,6 +135,7 @@ private:
     // Keys -> chord memory: the notes each held key started.
     int8_t keyNotes_[128][4];
     uint8_t keyCount_[128] = {};
+    uint8_t keyVel_[128] = {};
     int keysDown_ = 0;
 
     // Arpeggiator
@@ -138,6 +143,8 @@ private:
     int arpN_ = 0, arpStep_ = 0, arpCurrent_ = -1;
     double nextStep_ = 0, gateOff_ = -1;
     bool arpWasOn_ = false;
+    int arpModeWas_ = 0;     // to notice the arpeggiator / HOLD being switched
+    bool arpHoldWas_ = false;
     float panL_[kMaxUnison + 1][kMaxUnison], panR_[kMaxUnison + 1][kMaxUnison];
     Rng rng_;
 };

@@ -149,6 +149,7 @@ void Synth::noteOn(int note, int velocity) {
     if (arp && target_[P_ARP_HOLD] >= 0.5f && keysDown_ == 0) arpN_ = 0;  // held notes: a new chord replaces them
     if (keyCount_[note] == 0) ++keysDown_;
     keyCount_[note] = 0;
+    keyVel_[note] = static_cast<uint8_t>(velocity);
     for (int k = 0; k < 4 && kChordNotes[chord][k] >= 0; ++k) {
         int n = note + kChordNotes[chord][k];
         if (n > 127) continue;
@@ -215,12 +216,39 @@ bool Synth::pickArpNote(int mode, int& note, int& vel) {
     return true;
 }
 
+void Synth::arpFollowKeys() {
+    arpN_ = 0;
+    for (int k = 0; k < 128; ++k)
+        for (int j = 0; j < keyCount_[k]; ++j) arpAdd(keyNotes_[k][j], keyVel_[k]);
+}
+
 void Synth::runArp() {
     const int mode = static_cast<int>(target_[P_ARP_MODE]);
+    const bool hold = target_[P_ARP_HOLD] >= 0.5f;
+
+    // Switched on/off or HOLD changed: follow the keys actually held now, so
+    // nothing is left sounding or arpeggiating on its own.
+    if ((mode > 0) != (arpModeWas_ > 0)) {
+        if (mode > 0) {                       // on: held keys move from the voices to the arp
+            for (int k = 0; k < 128; ++k)
+                for (int j = 0; j < keyCount_[k]; ++j) voiceOff(keyNotes_[k][j]);
+            arpFollowKeys();
+        } else {                              // off: the arp stops, held keys play as they are
+            if (arpCurrent_ >= 0) voiceOff(arpCurrent_);
+            arpCurrent_ = -1;
+            gateOff_ = -1;
+            arpN_ = 0;
+            for (int k = 0; k < 128; ++k)
+                for (int j = 0; j < keyCount_[k]; ++j) voiceOn(keyNotes_[k][j], keyVel_[k]);
+        }
+    } else if (mode > 0 && arpHoldWas_ && !hold) {
+        arpFollowKeys();                      // HOLD off: let go of what's no longer held
+    }
+    arpModeWas_ = mode;
+    arpHoldWas_ = hold;
+
     if (mode <= 0) {
-        if (arpCurrent_ >= 0) { voiceOff(arpCurrent_); arpCurrent_ = -1; }
         arpWasOn_ = false;
-        arpN_ = 0;
         return;
     }
     const double step = kDivisions[std::clamp(static_cast<int>(target_[P_ARP_RATE]), 1, kNumDivisions - 1)].beats;
@@ -238,7 +266,7 @@ void Synth::runArp() {
     nextStep_ += step;
     if (arpCurrent_ >= 0) { voiceOff(arpCurrent_); arpCurrent_ = -1; }
     int note, vel;
-    if (!pickArpNote(mode, note, vel)) { arpStep_ = 0; return; }
+    if (!pickArpNote(mode, note, vel)) { arpStep_ = 0; gateOff_ = -1; return; }
     voiceOn(note, vel);
     arpCurrent_ = note;
     gateOff_ = start + step * clampf(target_[P_ARP_GATE], 0.05f, 1.0f) * 0.98;
@@ -278,6 +306,16 @@ void Synth::midiClock(double senderTime) {
         }
     }
     lastTickSample_ = t;
+    if (senderTime >= 0) {
+        // Map the sender's clock onto ours: the tick that arrived soonest after it was
+        // sent shows the offset (creeping up slowly in case the two clocks drift).
+        double d = static_cast<double>(t) / sr_ - senderTime;
+        senderOffset_ = senderOffsetSet_ ? std::min(senderOffset_ + 0.00002, d) : d;
+        senderOffsetSet_ = true;
+        lastTickTime_ = std::min(static_cast<double>(t), (senderTime + senderOffset_) * sr_);
+    } else {
+        lastTickTime_ = static_cast<double>(t);
+    }
 }
 
 void Synth::midiStart() {
@@ -292,11 +330,15 @@ void Synth::advanceClock(int n) {
         extClock_ = false;        // clock stopped arriving: back to the internal tempo
         nTicks_ = 0;
         lastSender_ = -1;
+        senderOffsetSet_ = false;
     }
     if (extClock_) {
+        // Where the last tick put us, plus the time since it really happened. Ticks
+        // timed by the sender (the Studio link) are exact; others are as fine as one
+        // audio period.
         bpm_ = extBpmShown_;
-        double proj = tickBeat_ + static_cast<double>(samplePos_ - lastTickSample_) * bpm_ / 60.0 / sr_;
-        beats_ = std::max(beats_, std::min(proj, tickBeat_ + 1.0 / 24.0));
+        double proj = tickBeat_ + (static_cast<double>(samplePos_) - lastTickTime_) * bpm_ / 60.0 / sr_;
+        beats_ = std::max(beats_, std::min(proj, tickBeat_ + 1.5 / 24.0));
     } else {
         bpm_ = clampf(status_ ? status_->tempo.load(std::memory_order_relaxed) : 120.0f, 20.0f, 300.0f);
         beats_ += static_cast<double>(n) * bpm_ / 60.0 / sr_;
