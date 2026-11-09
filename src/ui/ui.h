@@ -17,6 +17,7 @@ struct UiConfig {
     const std::vector<Wavetable>* tables = nullptr;
 
     std::string presetsDir;    // where "Save as" writes new presets
+    std::string wavetablesDir; // where USB imports put wavetables
     std::string statePath;     // touch calibration + last preset
     std::string audioDevice;   // shown on SYSTEM page
     std::string btDevice;

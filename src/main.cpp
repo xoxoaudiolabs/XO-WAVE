@@ -102,6 +102,7 @@ static UiConfig makeUiConfig(const KeyValues& conf, const std::vector<Wavetable>
     ui.bank = &gBank;
     ui.tables = &tables;
     ui.presetsDir = kvGet(conf, "presets.dir", "presets");
+    ui.wavetablesDir = kvGet(conf, "wavetables.dir", "wavetables");
     ui.statePath = kvGet(conf, "ui.state", "");
     ui.fontsDir = kvGet(conf, "ui.fonts", "/opt/xowave/fonts");
     ui.audioDevice = kvGet(conf, "audio.device", "default");

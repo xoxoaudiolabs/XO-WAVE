@@ -36,7 +36,7 @@ cp -n "$HERE"/presets/*.xowave /opt/xowave/presets/          # never overwrite s
 cp "$HERE"/wavetables/*.wav /opt/xowave/wavetables/ 2>/dev/null || true
 cp "$HERE"/fonts/* /opt/xowave/fonts/
 install -d -o "$RUN_USER" /var/lib/xowave                     # touchscreen settings + last preset
-chown -R "$RUN_USER" /opt/xowave/presets
+chown -R "$RUN_USER" /opt/xowave/presets /opt/xowave/wavetables   # (USB import writes here)
 if [[ -f /etc/xowave.conf ]]; then
     echo "    keeping existing /etc/xowave.conf (new default saved as /etc/xowave.conf.new)"
     install -m644 "$HERE/xowave.conf" /etc/xowave.conf.new
@@ -65,6 +65,10 @@ fi
 if [[ $NO_WIFI == 1 ]]; then
     grep -q '^dtoverlay=disable-wifi' "$CFG" || echo 'dtoverlay=disable-wifi' >> "$CFG"
 fi
+
+echo "==> USB sticks (wavetable + preset import)"
+sed -e "s/@UID@/$(id -u "$RUN_USER")/" -e "s/@GID@/$(id -g "$RUN_USER")/" "$HERE/install/99-xowave-usb.rules" > /etc/udev/rules.d/99-xowave-usb.rules
+udevadm control --reload-rules 2>/dev/null || true
 
 echo "==> Ethernet (XOXO Studio link)"
 if [[ -d /etc/NetworkManager ]]; then

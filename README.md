@@ -131,7 +131,8 @@ Change these in `/etc/xowave.conf` (`cc.<number> = <parameter>`). `xowave --list
 ## Presets and wavetables
 
 - Presets are text files in `/opt/xowave/presets/*.xowave`, one `parameter = value` per line. Wavetables can be given by name, e.g. `a_table = Formant`. Copy one, edit it, then run `sudo systemctl restart xowave`.
-- Put Serum-style wavetable `.wav` files (2048 samples per frame) in `/opt/xowave/wavetables/`. They're added after the 10 built-in tables. `xowave -c /etc/xowave.conf --list-tables` shows their numbers.
+- **From a USB stick:** plug it in and open **PRESETS → USB**. It lists the Serum-style wavetables (`.wav`) and XO-Wave presets (`.xowave`) on the stick (up to 3 folders deep). IMPORT copies one in, IMPORT ALL copies the lot; imported presets appear at once, imported wavetables after a RESTART (the button shows up). BACK UP PRESETS writes every preset to `XO-WAVE/presets` on the stick. FAT32 and exFAT sticks are mounted automatically.
+- Or copy Serum-style wavetable `.wav` files (2048 samples per frame) into `/opt/xowave/wavetables/` yourself. They're added after the 10 built-in tables. `xowave -c /etc/xowave.conf --list-tables` shows their numbers.
 
 The OSC page's **SUB** view has a sub oscillator (sine or square, one or two octaves down) and noise.
 

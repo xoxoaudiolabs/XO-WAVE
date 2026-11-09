@@ -22,6 +22,8 @@
 #include <vector>
 
 #include <dirent.h>
+#include <filesystem>
+#include <fstream>
 #include <unistd.h>
 
 #ifdef __linux__
@@ -157,6 +159,15 @@ struct State {
     lv_obj_t* paramLabel[P_COUNT] = {};    // text readouts (mod matrix source / destination)
     lv_obj_t* paramSlider[P_COUNT] = {};   // sliders (mod matrix amounts)
 
+    // USB stick
+    struct UsbFile { std::string path, name; bool wavetable; };
+    std::vector<UsbFile> usbFiles;
+    std::string usbRoot;
+    lv_obj_t* usbList = nullptr;
+    lv_obj_t* usbStatus = nullptr;
+    lv_obj_t* usbRestart = nullptr;
+    int usbImportedTables = 0;
+
     // KEYS
     int octave = 3;
     bool hold = false;
@@ -248,6 +259,8 @@ void refreshViews(int id);
 void updateKnob(Knob& k);
 void markState(const std::string& key, const std::string& value);
 void openVolume(lv_event_t*);
+void restartEvent(lv_event_t*);
+void modalCancel(lv_event_t*);
 
 void setParamUi(int id, float v) {
     v = paramClamp(id, v, S->numTables);
@@ -1425,6 +1438,199 @@ void deleteEvent(lv_event_t*) {
     lv_obj_align(d, LV_ALIGN_BOTTOM_RIGHT, -6, -6);
 }
 
+// USB stick ------------------------------------------------------------------
+
+namespace fs = std::filesystem;
+
+std::string lowerExt(const fs::path& p) {
+    std::string e = p.extension().string();
+    for (char& c : e) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return e;
+}
+
+// Mount points under /media (the udev rule mounts sticks at /media/usb-<dev>).
+std::vector<std::string> usbMounts() {
+    std::vector<std::string> out;
+    std::ifstream f("/proc/mounts");
+    std::string dev, mnt, rest;
+    while (f >> dev >> mnt && std::getline(f, rest))
+        if (mnt.rfind("/media/", 0) == 0) out.push_back(mnt);
+    return out;
+}
+
+void scanUsb() {
+    S->usbFiles.clear();
+    S->usbRoot.clear();
+    for (const std::string& root : usbMounts()) {
+        if (S->usbRoot.empty()) S->usbRoot = root;
+        std::error_code ec;
+        fs::recursive_directory_iterator it(root, fs::directory_options::skip_permission_denied, ec), end;
+        for (; !ec && it != end && S->usbFiles.size() < 150; it.increment(ec)) {
+            if (it.depth() > 3) { it.disable_recursion_pending(); continue; }
+            const fs::path& p = it->path();
+            std::string fn = p.filename().string();
+            if (fn.empty() || fn[0] == '.') { if (it->is_directory(ec)) it.disable_recursion_pending(); continue; }
+            if (!it->is_regular_file(ec)) continue;
+            std::string ext = lowerExt(p);
+            if (ext == ".wav" || ext == ".xowave")
+                S->usbFiles.push_back({p.string(), p.stem().string(), ext == ".wav"});
+        }
+    }
+    std::sort(S->usbFiles.begin(), S->usbFiles.end(), [](const auto& a, const auto& b) {
+        return a.wavetable != b.wavetable ? a.wavetable : a.name < b.name;
+    });
+}
+
+void usbSay(const std::string& text) { if (S->usbStatus) lv_label_set_text(S->usbStatus, text.c_str()); }
+
+bool importWavetable(const State::UsbFile& f, std::string& err) {
+    Wavetable check;
+    if (!loadWavetableWav(f.path, check, err)) return false;
+    std::error_code ec;
+    fs::create_directories(S->cfg.wavetablesDir, ec);
+    fs::copy_file(f.path, fs::path(S->cfg.wavetablesDir) / fs::path(f.path).filename(),
+                  fs::copy_options::overwrite_existing, ec);
+    if (ec) { err = ec.message(); return false; }
+    ++S->usbImportedTables;
+    return true;
+}
+
+bool importPreset(const State::UsbFile& f, std::string& err) {
+    KeyValues kv;
+    if (!readKeyValues(f.path, kv)) { err = "can't read"; return false; }
+    std::vector<std::string> warnings;
+    Preset p = presetFromKeyValues(f.name, kv, *S->cfg.tables, warnings);
+    PresetBank& bank = *S->cfg.bank;
+    int idx = bank.find(p.name.c_str());
+    std::string path;
+    if (idx >= 0 && bank.file(idx)[0]) {
+        path = bank.file(idx);
+    } else {
+        char prefix[16];
+        std::snprintf(prefix, sizeof prefix, "%02d-", bank.count() + 1);
+        path = S->cfg.presetsDir + "/" + prefix + slugify(p.name) + ".xowave";
+        idx = bank.count();
+    }
+    if (!savePresetFile(path, p.name, p.values.data(), *S->cfg.tables)) { err = "can't write presets"; return false; }
+    bank.write(idx, p.name.c_str(), path.c_str(), p.values.data());
+    return true;
+}
+
+void showUsbRestart() {
+    if (!S->usbRestart) return;
+    if (S->usbImportedTables > 0) lv_obj_remove_flag(S->usbRestart, LV_OBJ_FLAG_HIDDEN);
+    else lv_obj_add_flag(S->usbRestart, LV_OBJ_FLAG_HIDDEN);
+}
+
+void usbImportOne(lv_event_t* e) {
+    size_t i = static_cast<size_t>(reinterpret_cast<intptr_t>(lv_event_get_user_data(e)));
+    if (i >= S->usbFiles.size()) return;
+    const auto& f = S->usbFiles[i];
+    std::string err;
+    bool ok = f.wavetable ? importWavetable(f, err) : importPreset(f, err);
+    if (!ok) usbSay("COULDN'T IMPORT " + f.name + ": " + err);
+    else if (f.wavetable) usbSay("WAVETABLE " + f.name + " IMPORTED. RESTART TO LOAD IT.");
+    else { usbSay("PRESET " + f.name + " IMPORTED."); rebuildPresetList(); }
+    lv_obj_add_state(lv_event_get_target_obj(e), LV_STATE_DISABLED);
+    showUsbRestart();
+}
+
+void usbImportAll(lv_event_t*) {
+    int tables = 0, presets = 0, failed = 0;
+    for (const auto& f : S->usbFiles) {
+        std::string err;
+        bool ok = f.wavetable ? importWavetable(f, err) : importPreset(f, err);
+        if (!ok) ++failed;
+        else if (f.wavetable) ++tables;
+        else ++presets;
+    }
+    rebuildPresetList();
+    char msg[160];
+    std::snprintf(msg, sizeof msg, "IMPORTED %d WAVETABLE(S), %d PRESET(S)%s%s", tables, presets,
+                  failed ? ", SOME FAILED" : "", tables ? ". RESTART TO LOAD THE WAVETABLES." : ".");
+    usbSay(msg);
+    showUsbRestart();
+}
+
+void usbBackup(lv_event_t*) {
+    if (S->usbRoot.empty()) { usbSay("NO USB STICK."); return; }
+    fs::path dir = fs::path(S->usbRoot) / "XO-WAVE" / "presets";
+    std::error_code ec;
+    fs::create_directories(dir, ec);
+    int n = 0;
+    PresetBank& bank = *S->cfg.bank;
+    for (int i = 0; i < bank.count(); ++i) {
+        float v[P_COUNT];
+        bank.read(i, v);
+        char name[64];
+        std::snprintf(name, sizeof name, "%02d-%s.xowave", i + 1, slugify(bank.name(i)).c_str());
+        if (savePresetFile((dir / name).string(), bank.name(i), v, *S->cfg.tables)) ++n;
+    }
+    ::sync();
+    usbSay("BACKED UP " + std::to_string(n) + " PRESETS TO XO-WAVE/PRESETS ON THE STICK. SAFE TO REMOVE.");
+}
+
+void fillUsbList() {
+    if (!S->usbList) return;
+    lv_obj_clean(S->usbList);
+    for (size_t i = 0; i < S->usbFiles.size(); ++i) {
+        const auto& f = S->usbFiles[i];
+        lv_obj_t* r = row(S->usbList, 448, 34);
+        lv_obj_set_flex_align(r, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+        lv_obj_t* tag = label(r, f.wavetable ? "WAVETABLE" : "PRESET", fLabel, f.wavetable ? kSignal : kDim);
+        lv_obj_set_width(tag, 80);
+        lv_obj_t* n = label(r, f.name.c_str(), fSmall, kText);
+        lv_obj_set_width(n, 250);
+        lv_label_set_long_mode(n, LV_LABEL_LONG_DOT);
+        button(r, "IMPORT", 84, 30, usbImportOne, reinterpret_cast<void*>(static_cast<intptr_t>(i)));
+    }
+    if (S->usbFiles.empty())
+        usbSay(S->usbRoot.empty() ? "NO USB STICK FOUND. PLUG ONE IN AND TAP RESCAN."
+                                  : "NO .WAV WAVETABLES OR .XOWAVE PRESETS ON THE STICK.");
+    else
+        usbSay(std::to_string(S->usbFiles.size()) + " FILE(S) FOUND ON THE STICK. TAP IMPORT, OR IMPORT ALL.");
+}
+
+void usbRescan(lv_event_t*) {
+    scanUsb();
+    fillUsbList();
+}
+
+void openUsb(lv_event_t*) {
+    modalBase(470, 310);
+    lv_obj_t* box = modalBox();
+    lv_obj_t* t = label(box, LV_SYMBOL_USB " USB STICK", fMed, kText);
+    lv_obj_align(t, LV_ALIGN_TOP_LEFT, 4, 6);
+    lv_obj_t* rescan = button(box, LV_SYMBOL_REFRESH " RESCAN", 100, 32, usbRescan);
+    lv_obj_align(rescan, LV_ALIGN_TOP_RIGHT, -76, 0);
+    lv_obj_t* close = button(box, LV_SYMBOL_CLOSE, 66, 32, modalCancel);
+    lv_obj_align(close, LV_ALIGN_TOP_RIGHT, -4, 0);
+    S->usbStatus = label(box, "", fLabel, kDim);
+    lv_obj_set_width(S->usbStatus, 450);
+    lv_label_set_long_mode(S->usbStatus, LV_LABEL_LONG_WRAP);
+    lv_obj_align(S->usbStatus, LV_ALIGN_TOP_LEFT, 4, 38);
+    S->usbList = lv_obj_create(box);
+    lv_obj_remove_style_all(S->usbList);
+    lv_obj_set_size(S->usbList, 456, 182);
+    lv_obj_align(S->usbList, LV_ALIGN_TOP_MID, 0, 66);
+    lv_obj_set_flex_flow(S->usbList, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(S->usbList, 2, 0);
+    lv_obj_add_flag(S->usbList, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scroll_dir(S->usbList, LV_DIR_VER);
+    lv_obj_t* bar = row(box, 456, 38);
+    lv_obj_align(bar, LV_ALIGN_BOTTOM_MID, 0, 0);
+    lv_obj_set_flex_align(bar, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    button(bar, "IMPORT ALL", 130, 34, usbImportAll);
+    button(bar, LV_SYMBOL_SAVE " BACK UP PRESETS", 180, 34, usbBackup);
+    S->usbRestart = button(bar, "RESTART", 100, 34, restartEvent);
+    lv_obj_set_style_bg_color(S->usbRestart, C(kSignal), 0);
+    lv_obj_set_style_border_color(S->usbRestart, C(kSignal), 0);
+    lv_obj_set_style_text_color(S->usbRestart, C(kBg), 0);
+    showUsbRestart();
+    scanUsb();
+    fillUsbList();
+}
+
 void buildPresets(lv_obj_t* tab) {
     S->presetList = lv_list_create(tab);
     lv_obj_set_size(S->presetList, 300, 236);
@@ -1436,11 +1642,12 @@ void buildPresets(lv_obj_t* tab) {
     lv_obj_t* side = panel(tab, 164, 236);
     lv_obj_set_flex_flow(side, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(side, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_row(side, 8, 0);
-    button(side, LV_SYMBOL_SAVE " SAVE", 150, 46, saveEvent);
-    button(side, LV_SYMBOL_EDIT " SAVE AS", 150, 46, openSaveAs);
-    button(side, LV_SYMBOL_TRASH " DELETE", 150, 46, deleteEvent);
-    S->presetInfo = label(side, "MIDI PROGRAM CHANGE PICKS A PRESET BY NUMBER.", fLabel, kDim);
+    lv_obj_set_style_pad_row(side, 6, 0);
+    button(side, LV_SYMBOL_SAVE " SAVE", 150, 40, saveEvent);
+    button(side, LV_SYMBOL_EDIT " SAVE AS", 150, 40, openSaveAs);
+    button(side, LV_SYMBOL_TRASH " DELETE", 150, 40, deleteEvent);
+    button(side, LV_SYMBOL_USB " USB", 150, 40, openUsb);
+    S->presetInfo = label(side, "PROGRAM CHANGE PICKS A PRESET BY NUMBER.", fLabel, kDim);
     lv_obj_set_width(S->presetInfo, 150);
     lv_label_set_long_mode(S->presetInfo, LV_LABEL_LONG_WRAP);
     rebuildPresetList();
@@ -2858,6 +3065,17 @@ bool uiSnapshot(const UiConfig& cfg, const std::string& dir) {
     setFocusOsc(2);
     shot("1-osc-sub");
     setFocusOsc(0);
+    {
+        lv_tabview_set_active(S->tabview, 6, LV_ANIM_OFF);
+        openUsb(nullptr);
+        S->usbRoot = "/media/usb-sda1";
+        S->usbFiles = {{"/media/usb-sda1/Tables/Analog Brass.wav", "Analog Brass", true},
+                       {"/media/usb-sda1/Tables/Vox Morph.wav", "Vox Morph", true},
+                       {"/media/usb-sda1/XO-WAVE/presets/09-dusk-pad.xowave", "09-dusk-pad", false}};
+        fillUsbList();
+        shot("8-usb");
+        closeModal();
+    }
     openVolume(nullptr);
     shot("8-volume");
     volClose(nullptr);

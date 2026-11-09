@@ -1,0 +1,6 @@
+# XO-Wave: mount USB sticks at /media/usb-<device> so the touchscreen can import
+# wavetables and presets and back presets up (PRESETS > USB). FAT/exFAT sticks are
+# mounted for the XO-Wave user (@UID@); others as they are. Unmounted when pulled.
+ACTION=="add", SUBSYSTEMS=="usb", SUBSYSTEM=="block", ENV{ID_FS_USAGE}=="filesystem", ENV{ID_FS_TYPE}=="vfat|exfat", RUN{program}+="/usr/bin/systemd-mount --no-block --collect -o uid=@UID@,gid=@GID@,umask=022 $devnode /media/usb-%k"
+ACTION=="add", SUBSYSTEMS=="usb", SUBSYSTEM=="block", ENV{ID_FS_USAGE}=="filesystem", ENV{ID_FS_TYPE}!="vfat|exfat", RUN{program}+="/usr/bin/systemd-mount --no-block --collect $devnode /media/usb-%k"
+ACTION=="remove", SUBSYSTEM=="block", ENV{ID_FS_USAGE}=="filesystem", RUN{program}+="/usr/bin/systemd-umount /media/usb-%k"
