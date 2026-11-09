@@ -16,6 +16,7 @@ say() { echo "$*"; [[ ${LOGGING:-0} == 1 ]] && echo "$*" >> "$LOG"; }
 installed() { cat /opt/xowave/VERSION 2>/dev/null || echo "?"; }
 
 fetch() {
+    if ! command -v git >/dev/null; then say "ERROR: GIT ISN'T INSTALLED (sudo apt install git)"; return 1; fi
     if [[ ! -f $KEY ]]; then say "ERROR: NO DEPLOY KEY ($KEY)"; return 1; fi
     if [[ -d $SRC/.git ]]; then
         git -C "$SRC" fetch -q origin main 2>>"$LOG.err" || { say "ERROR: CAN'T REACH GITHUB"; return 1; }

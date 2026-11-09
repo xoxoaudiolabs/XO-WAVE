@@ -22,7 +22,7 @@ done
 if [[ $UPDATE == 0 ]]; then
 echo "==> Installing packages"
 apt-get update
-apt-get install -y build-essential libasound2-dev alsa-utils bluez rfkill
+apt-get install -y build-essential libasound2-dev alsa-utils bluez rfkill git
 if ! apt-get install -y bluez-alsa-utils libasound2-plugin-bluez; then
     echo "!! BlueALSA packages not found - Bluetooth audio output will be unavailable."
 fi
