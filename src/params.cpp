@@ -71,7 +71,27 @@ const ParamInfo kParams[P_COUNT] = {
     {"arp_gate", 0.05f, 1, 0.5f, LIN, false, "Arpeggiator note length (part of a step)"},
     {"arp_hold", 0, 1, 0, LIN, true, "Arpeggiator hold: notes keep playing after the keys are let go"},
     {"chord", 0, 8, 0, LIN, true, "Chord memory: 0 off, maj, min, 7, maj7, min7, sus4, 5th, oct"},
+    {"lfo2_rate", 0.01f, 20, 0.5f, EXP, false, "LFO 2 rate (Hz)"},
+    {"lfo2_shape", 0, 4, 1, LIN, true, "LFO 2 shape: 0 sine, 1 tri, 2 saw, 3 square, 4 S&H"},
+    {"lfo2_sync", 0, 15, 0, LIN, true, "LFO 2 sync: 0 free, else a note division"},
+    {"mod1_src", 0, 9, 0, LIN, true, "Mod slot 1 source"},
+    {"mod1_dst", 0, 8, 0, LIN, true, "Mod slot 1 destination"},
+    {"mod1_amt", -1, 1, 0, LIN, false, "Mod slot 1 amount"},
+    {"mod2_src", 0, 9, 0, LIN, true, "Mod slot 2 source"},
+    {"mod2_dst", 0, 8, 0, LIN, true, "Mod slot 2 destination"},
+    {"mod2_amt", -1, 1, 0, LIN, false, "Mod slot 2 amount"},
+    {"mod3_src", 0, 9, 0, LIN, true, "Mod slot 3 source"},
+    {"mod3_dst", 0, 8, 0, LIN, true, "Mod slot 3 destination"},
+    {"mod3_amt", -1, 1, 0, LIN, false, "Mod slot 3 amount"},
+    {"mod4_src", 0, 9, 0, LIN, true, "Mod slot 4 source"},
+    {"mod4_dst", 0, 8, 0, LIN, true, "Mod slot 4 destination"},
+    {"mod4_amt", -1, 1, 0, LIN, false, "Mod slot 4 amount"},
 };
+
+const char* const kModSourceNames[kModSources] = {"OFF", "LFO 1", "LFO 2", "MOD ENV", "AMP ENV",
+                                                  "VELOCITY", "MOD WHEEL", "AFTERTOUCH", "KEY", "RANDOM"};
+const char* const kModDestNames[kModDests] = {"OFF", "A POS", "B POS", "CUTOFF", "RESO",
+                                              "PITCH", "A LEVEL", "B LEVEL", "DRIVE"};
 
 int findParam(const std::string& name) {
     for (int i = 0; i < P_COUNT; ++i)
@@ -161,6 +181,21 @@ void paramFormat(int id, float v, char* out, int len, const char* const* tableNa
         case P_ARP_HOLD:
             std::snprintf(out, len, "%s", v >= 0.5f ? "ON" : "OFF");
             return;
+        case P_M1_SRC: case P_M2_SRC: case P_M3_SRC: case P_M4_SRC:
+            std::snprintf(out, len, "%s", kModSourceNames[std::clamp(static_cast<int>(v), 0, kModSources - 1)]);
+            return;
+        case P_M1_DST: case P_M2_DST: case P_M3_DST: case P_M4_DST:
+            std::snprintf(out, len, "%s", kModDestNames[std::clamp(static_cast<int>(v), 0, kModDests - 1)]);
+            return;
+        case P_LFO2_SHAPE: {
+            static const char* m[] = {"SIN", "TRI", "SAW", "SQR", "S&H"};
+            std::snprintf(out, len, "%s", m[std::clamp(static_cast<int>(v), 0, 4)]);
+            return;
+        }
+        case P_LFO2_RATE:
+            std::snprintf(out, len, v < 1.0f ? "%.2fHz" : (v < 10.0f ? "%.1fHz" : "%.0fHz"), v);
+            return;
+        case P_LFO2_SYNC:
         case P_LFO_SYNC:
         case P_ARP_RATE:
         case P_DELAY_SYNC: {

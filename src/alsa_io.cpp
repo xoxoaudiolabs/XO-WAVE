@@ -242,6 +242,10 @@ int AlsaMidi::poll(Synth& synth, int channel, Tap tap, void* tapCtx) {
                 if (chOk(ev->data.control.channel)) synth.programChange(ev->data.control.value);
                 fwd(static_cast<uint8_t>(0xC0 | (ev->data.control.channel & 15)), static_cast<uint8_t>(ev->data.control.value & 127), 0, 2);
                 break;
+            case SND_SEQ_EVENT_CHANPRESS:
+                if (chOk(ev->data.control.channel)) synth.aftertouch(ev->data.control.value / 127.0f);
+                fwd(static_cast<uint8_t>(0xD0 | (ev->data.control.channel & 15)), static_cast<uint8_t>(ev->data.control.value & 127), 0, 2);
+                break;
             case SND_SEQ_EVENT_CLOCK: synth.midiClock(); break;
             case SND_SEQ_EVENT_START: synth.midiStart(); break;
             case SND_SEQ_EVENT_CONTINUE: synth.midiContinue(); break;

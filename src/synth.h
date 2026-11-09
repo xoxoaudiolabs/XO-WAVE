@@ -40,6 +40,7 @@ public:
     void midiStop() {}
     void controlChange(int cc, int value);
     void pitchBend(float amount);  // -1 .. 1
+    void aftertouch(float amount) { aftertouch_ = amount; }  // channel pressure 0 .. 1
     void programChange(int program);
     void allNotesOff(bool hard);
 
@@ -72,6 +73,7 @@ private:
         Env amp, mod;
         float phaseA[kMaxUnison] = {}, phaseB[kMaxUnison] = {};
         Svf filtL, filtR;
+        float rnd = 0;  // per-note random (mod matrix source)
     };
 
     void renderBlock(float* left, float* right, int n);
@@ -105,6 +107,8 @@ private:
     // per-block derived state
     EnvCoefs ampCoefs_, modCoefs_;
     float lfoPhase_ = 0, lfoValue_ = 0, lfoSH_ = 0;
+    float lfo2Phase_ = 0, lfo2Value_ = 0, lfo2SH_ = 0;
+    float aftertouch_ = 0;
     float glideCoef_ = 0;
     float livePos_[2] = {-1, -1};
     float masterSmooth_ = 0.64f;

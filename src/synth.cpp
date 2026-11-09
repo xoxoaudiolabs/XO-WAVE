@@ -67,6 +67,7 @@ void Synth::startVoice(Voice& v, int note, int velocity, bool fresh) {
     if (fresh || v.note != note) v.pitch = (target_[P_GLIDE] > 0.0005f) ? lastPitch_ : static_cast<float>(note);
     v.note = note;
     v.vel = velocity / 127.0f;
+    v.rnd = rng_.bi();
     v.gate = true;
     v.held = false;
     v.age = ++ageCounter_;
@@ -402,6 +403,27 @@ void Synth::renderBlock(float* left, float* right, int n) {
         default: lfoValue_ = lfoSH_; break;
     }
 
+    // LFO 2 (a mod matrix source).
+    {
+        const int sync2 = static_cast<int>(target_[P_LFO2_SYNC]);
+        if (sync2 > 0 && sync2 < kNumDivisions) {
+            double div = kDivisions[sync2].beats;
+            float ph = static_cast<float>(beats_ / div - std::floor(beats_ / div));
+            if (ph < lfo2Phase_) lfo2SH_ = rng_.bi();
+            lfo2Phase_ = ph;
+        } else {
+            lfo2Phase_ += smooth_[P_LFO2_RATE] * n / sr_;
+            if (lfo2Phase_ >= 1.0f) { lfo2Phase_ -= std::floor(lfo2Phase_); lfo2SH_ = rng_.bi(); }
+        }
+        switch (static_cast<int>(target_[P_LFO2_SHAPE])) {
+            case 0: lfo2Value_ = std::sin(2.0f * kPi * lfo2Phase_); break;
+            case 1: lfo2Value_ = 1.0f - 4.0f * std::fabs(lfo2Phase_ - 0.5f); break;
+            case 2: lfo2Value_ = 1.0f - 2.0f * lfo2Phase_; break;
+            case 3: lfo2Value_ = lfo2Phase_ < 0.5f ? 1.0f : -1.0f; break;
+            default: lfo2Value_ = lfo2SH_; break;
+        }
+    }
+
     // Equal-power pan positions for each unison count.
     float spread = smooth_[P_SPREAD];
     for (int U = 1; U <= kMaxUnison; ++U) {
@@ -435,24 +457,49 @@ void Synth::renderVoice(Voice& v, float* outL, float* outR, int n) {
     v.pitch = glideCoef_ > 0.0f ? notePitch + (v.pitch - notePitch) * glideCoef_ : notePitch;
 
     const float modEnv = v.mod.next(modCoefs_);  // control rate
+
+    // Mod matrix: each slot adds source x amount to a destination.
+    float mDst[kModDests] = {};
+    for (int k = 0; k < kModSlots; ++k) {
+        const int src = static_cast<int>(target_[P_M1_SRC + 3 * k]);
+        const int dst = static_cast<int>(target_[P_M1_DST + 3 * k]);
+        const float amt = smooth_[P_M1_AMT + 3 * k];
+        if (src <= 0 || dst <= 0 || dst >= kModDests || std::fabs(amt) < 1e-4f) continue;
+        float sv;
+        switch (src) {
+            case 1: sv = lfoValue_; break;
+            case 2: sv = lfo2Value_; break;
+            case 3: sv = modEnv; break;
+            case 4: sv = v.amp.v; break;
+            case 5: sv = v.vel; break;
+            case 6: sv = modWheel_; break;
+            case 7: sv = aftertouch_; break;
+            case 8: sv = clampf((v.pitch - 60.0f) / 36.0f, -1.0f, 1.0f); break;
+            default: sv = v.rnd; break;
+        }
+        mDst[dst] += sv * amt;
+    }
+
     const float vib = lfoValue_ * (smooth_[P_LFO_PITCH] + modWheel_ * 0.5f);
-    const float basePitch = v.pitch + bend_ * target_[P_BEND_RANGE] + vib;
+    const float basePitch = v.pitch + bend_ * target_[P_BEND_RANGE] + vib + mDst[5] * 12.0f;   // PITCH: +/-1 octave
     const float posMod = modEnv * smooth_[P_MENV_POS] + lfoValue_ * smooth_[P_LFO_POS] * 0.5f;
     const int last = numTables() - 1;
+    const float levelA = clampf(smooth_[P_A_LEVEL] + mDst[6], 0.0f, 1.0f);
+    const float levelB = clampf(smooth_[P_B_LEVEL] + mDst[7], 0.0f, 1.0f);
 
     float bufL[kBlock] = {}, bufR[kBlock] = {};
-    if (smooth_[P_A_LEVEL] > 1e-4f) {
+    if (levelA > 1e-4f) {
         const Wavetable& wt = tables_[std::min(static_cast<int>(target_[P_A_TABLE]), last)];
-        livePos_[0] = clampf(smooth_[P_A_POS] + posMod, 0.0f, 1.0f);
+        livePos_[0] = clampf(smooth_[P_A_POS] + posMod + mDst[1], 0.0f, 1.0f);
         renderOsc(wt, livePos_[0],
-                  basePitch + target_[P_A_SEMI] + smooth_[P_A_FINE] * 0.01f, smooth_[P_A_LEVEL],
+                  basePitch + target_[P_A_SEMI] + smooth_[P_A_FINE] * 0.01f, levelA,
                   static_cast<int>(target_[P_A_UNISON]), smooth_[P_A_DETUNE], v.phaseA, bufL, bufR, n);
     }
-    if (smooth_[P_B_LEVEL] > 1e-4f) {
+    if (levelB > 1e-4f) {
         const Wavetable& wt = tables_[std::min(static_cast<int>(target_[P_B_TABLE]), last)];
-        livePos_[1] = clampf(smooth_[P_B_POS] + posMod, 0.0f, 1.0f);
+        livePos_[1] = clampf(smooth_[P_B_POS] + posMod + mDst[2], 0.0f, 1.0f);
         renderOsc(wt, livePos_[1],
-                  basePitch + target_[P_B_SEMI] + smooth_[P_B_FINE] * 0.01f, smooth_[P_B_LEVEL],
+                  basePitch + target_[P_B_SEMI] + smooth_[P_B_FINE] * 0.01f, levelB,
                   static_cast<int>(target_[P_B_UNISON]), smooth_[P_B_DETUNE], v.phaseB, bufL, bufR, n);
     }
 
@@ -460,11 +507,11 @@ void Synth::renderVoice(Voice& v, float* outL, float* outR, int n) {
     const float velF = (1.0f - smooth_[P_VEL_FILTER]) + smooth_[P_VEL_FILTER] * v.vel;
     const float octaves = smooth_[P_FENV] * 6.0f * modEnv * velF +
                           smooth_[P_FKEY] * (v.pitch - 60.0f) * (1.0f / 12.0f) +
-                          lfoValue_ * smooth_[P_LFO_CUTOFF] * 3.0f;
+                          lfoValue_ * smooth_[P_LFO_CUTOFF] * 3.0f + mDst[3] * 6.0f;   // CUTOFF: +/-6 octaves
     SvfCoefs c;
-    c.set(smooth_[P_CUTOFF] * std::exp2(octaves), smooth_[P_RESO], sr_);
+    c.set(smooth_[P_CUTOFF] * std::exp2(octaves), clampf(smooth_[P_RESO] + mDst[4], 0.0f, 1.0f), sr_);
     const int mode = static_cast<int>(target_[P_FILTER_MODE]);
-    const float drive = smooth_[P_DRIVE];
+    const float drive = clampf(smooth_[P_DRIVE] + mDst[8], 0.0f, 1.0f);
     const float driveGain = 1.0f + drive * 6.0f;
     const float velA = (1.0f - smooth_[P_VEL_AMP]) + smooth_[P_VEL_AMP] * v.vel;
 

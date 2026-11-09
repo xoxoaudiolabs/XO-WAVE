@@ -191,6 +191,26 @@ int main() {
         check(ext && std::fabs(following - 125) < 0.6f && !st.extClock.load() && std::fabs(st.bpmNow.load() - 120) < 0.01f, msg);
     }
 
+    {  // 9. Mod matrix: VELOCITY -> A LEVEL at -100%: a hard hit is silent, a soft one isn't.
+        auto peakFor = [&](int vel) {
+            Synth s(sr, 8, tables);
+            s.setParam(P_M1_SRC, 5); s.setParam(P_M1_DST, 6); s.setParam(P_M1_AMT, -1.0f);
+            s.setParam(P_VEL_AMP, 0); s.setParam(P_A_LEVEL, 0.8f);
+            std::vector<float> L(256), R(256);
+            s.noteOn(60, vel);
+            float pk = 0;
+            for (int b = 0; b < 40; ++b) {
+                s.render(L.data(), R.data(), 256);
+                if (b > 10) for (float x : L) pk = std::max(pk, std::fabs(x));
+            }
+            return pk;
+        };
+        float hard = peakFor(127), soft = peakFor(20);
+        char msg[120];
+        std::snprintf(msg, sizeof msg, "mod matrix VELOCITY>A LEVEL -100%%: hard hit %.4f (silent), soft %.3f", hard, soft);
+        check(hard < 0.001f && soft > 0.02f, msg);
+    }
+
     std::printf(failures ? "\n%d check(s) failed\n" : "\nall checks passed\n", failures);
     return failures ? 1 : 0;
 }

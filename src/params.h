@@ -25,6 +25,12 @@ enum ParamId {
     P_LFO_SYNC,
     P_ARP_MODE, P_ARP_RATE, P_ARP_OCT, P_ARP_GATE, P_ARP_HOLD,
     P_CHORD,
+    // LFO 2 + mod matrix (4 slots: source, destination, amount; contiguous)
+    P_LFO2_RATE, P_LFO2_SHAPE, P_LFO2_SYNC,
+    P_M1_SRC, P_M1_DST, P_M1_AMT,
+    P_M2_SRC, P_M2_DST, P_M2_AMT,
+    P_M3_SRC, P_M3_DST, P_M3_AMT,
+    P_M4_SRC, P_M4_DST, P_M4_AMT,
     P_COUNT
 };
 
@@ -43,6 +49,11 @@ extern const ParamInfo kParams[P_COUNT];
 int findParam(const std::string& name);                // -1 if unknown
 float paramFromNormalized(int id, float n, int numTables);
 float paramClamp(int id, float v, int numTables);
+constexpr int kModSlots = 4;
+constexpr int kModSources = 10;   // OFF, LFO 1, LFO 2, MOD ENV, AMP ENV, VELOCITY, MOD WHEEL, AFTERTOUCH, KEY, RANDOM
+constexpr int kModDests = 9;      // OFF, A POS, B POS, CUTOFF, RESO, PITCH, A LEVEL, B LEVEL, DRIVE
+extern const char* const kModSourceNames[kModSources];
+extern const char* const kModDestNames[kModDests];
 float paramToNormalized(int id, float v, int numTables);
 bool paramIsBipolar(int id);
 // Human-readable value for the UI. tableNames may be null.

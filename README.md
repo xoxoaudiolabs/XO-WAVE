@@ -85,7 +85,7 @@ Tabs along the bottom:
 | **OSC** | 3D wavetable view (the frame being played is drawn in signal red and follows modulation live). Drag on it to scan the table. OSC A / OSC B switch, wavetable picker, position, level, semi, fine, unison, detune |
 | **FILTER** | Low / band / high-pass, live response curve, cutoff, resonance, envelope amount, key tracking, drive, velocity |
 | **ENV** | Amp and mod envelopes with shape previews |
-| **MOD** | LFO shape/rate (free or synced to the tempo) and destinations, mod-env → position, velocity, glide, bend range, stereo spread, volume |
+| **MOD** | Four views: **LFO 1** (shape, rate free or synced, destinations), **LFO 2**, **MATRIX** (4 slots: LFO 1/2, mod env, amp env, velocity, mod wheel, aftertouch, key, per-note random → osc A/B position, cutoff, resonance, pitch, osc A/B level, drive, with amounts ±100%) and **PERFORM**: mod-env → position, velocity, glide, bend range, stereo spread, volume |
 | **FX** | Delay (free or synced to the tempo: 1/32 to 4 bars, triplets and dotted; feedback, tone, ping-pong), chorus, reverb (size, damping) and a bus drive before them |
 | **PLAY** | Arpeggiator (up, down, up/down, random, as played; rate, octaves, gate, hold), chord memory (maj, min, 7, maj7, min7, sus4, 5th, oct), tempo, and a two-octave keyboard with octave shift, latch and all notes off |
 | **PRESETS** | Load, save, save as (on-screen keyboard), delete |

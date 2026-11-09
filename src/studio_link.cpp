@@ -643,6 +643,9 @@ void applyMidi(Synth& synth, const MidiMsg& m, int channel) {
         case 0xC0:
             if (m.len >= 2) synth.programChange(m.b[1]);
             break;
+        case 0xD0:
+            if (m.len >= 2) synth.aftertouch(m.b[1] / 127.0f);
+            break;
         default:
             break;
     }

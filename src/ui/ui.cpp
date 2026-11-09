@@ -148,6 +148,14 @@ struct State {
     bool extShown = false;
     lv_chart_series_t* lfoSer = nullptr;
     int32_t lfoY[kLfoPts] = {};
+    lv_obj_t* lfo2Shape = nullptr;
+    lv_obj_t* lfo2Chart = nullptr;
+    lv_chart_series_t* lfo2Ser = nullptr;
+    int32_t lfo2Y[kLfoPts] = {};
+    lv_obj_t* modViewSel = nullptr;
+    lv_obj_t* modView[4] = {};
+    lv_obj_t* paramLabel[P_COUNT] = {};    // text readouts (mod matrix source / destination)
+    lv_obj_t* paramSlider[P_COUNT] = {};   // sliders (mod matrix amounts)
 
     // KEYS
     int octave = 3;
@@ -609,9 +617,8 @@ void drawEnv(int which) {
     lv_chart_refresh(S->envChart[which]);
 }
 
-void drawLfo() {
-    if (!S->lfoChart) return;
-    int shape = static_cast<int>(S->values[P_LFO_SHAPE]);
+void drawLfoShape(int shape, int32_t* ys, lv_obj_t* chartObj, lv_obj_t* matrix) {
+    if (!chartObj) return;
     uint32_t seed = 7;
     float sh = 0;
     for (int i = 0; i < kLfoPts; ++i) {
@@ -629,10 +636,28 @@ void drawLfo() {
             case 3: v = ph < 0.5f ? 1.0f : -1.0f; break;
             default: v = sh; break;
         }
-        S->lfoY[i] = static_cast<int32_t>(v * 100.0f);
+        ys[i] = static_cast<int32_t>(v * 100.0f);
     }
-    lv_chart_refresh(S->lfoChart);
-    setMatrixChecked(S->lfoShape, shape);
+    lv_chart_refresh(chartObj);
+    setMatrixChecked(matrix, shape);
+}
+
+void drawLfo() { drawLfoShape(static_cast<int>(S->values[P_LFO_SHAPE]), S->lfoY, S->lfoChart, S->lfoShape); }
+void drawLfo2() { drawLfoShape(static_cast<int>(S->values[P_LFO2_SHAPE]), S->lfo2Y, S->lfo2Chart, S->lfo2Shape); }
+
+void showParamReadout(int id) {
+    if (S->paramLabel[id]) {
+        char buf[24];
+        paramFormat(id, S->values[id], buf, sizeof buf, S->tableNames.data(), S->numTables);
+        lv_label_set_text(S->paramLabel[id], buf);
+        bool off = S->values[id] < 0.5f;   // OFF source / destination dimmed
+        lv_obj_set_style_text_color(S->paramLabel[id], C(off ? kDim : kText), 0);
+    }
+    if (S->paramSlider[id]) {
+        lv_slider_set_value(S->paramSlider[id], static_cast<int32_t>(std::lround(S->values[id] * 100)), LV_ANIM_OFF);
+        lv_obj_t* v = static_cast<lv_obj_t*>(lv_obj_get_user_data(S->paramSlider[id]));
+        if (v) lv_label_set_text_fmt(v, "%+d", static_cast<int>(std::lround(S->values[id] * 100)));
+    }
 }
 
 void refreshViews(int id) {
@@ -646,8 +671,10 @@ void refreshViews(int id) {
         case P_DELAY_PP: setButtonOn(S->pingPong, S->values[P_DELAY_PP] >= 0.5f); break;
         case P_ARP_MODE: setMatrixChecked(S->arpMode, static_cast<int>(S->values[P_ARP_MODE])); break;
         case P_ARP_HOLD: setButtonOn(S->arpHoldBtn, S->values[P_ARP_HOLD] >= 0.5f); break;
+        case P_LFO2_SHAPE: drawLfo2(); break;
         default: break;
     }
+    if (S->paramLabel[id] || S->paramSlider[id]) showParamReadout(id);
 }
 
 // ---------------------------------------------------------------------------
@@ -860,34 +887,136 @@ void buildFx(lv_obj_t* tab) {
     setButtonOn(S->pingPong, S->values[P_DELAY_PP] >= 0.5f);
 }
 
+void lfo2ShapeEvent(lv_event_t* e) {
+    setParamUi(P_LFO2_SHAPE, static_cast<float>(lv_buttonmatrix_get_selected_button(lv_event_get_target_obj(e))));
+}
+
+void showModView(int idx) {
+    for (int i = 0; i < 4; ++i) {
+        if (i == idx) lv_obj_remove_flag(S->modView[i], LV_OBJ_FLAG_HIDDEN);
+        else lv_obj_add_flag(S->modView[i], LV_OBJ_FLAG_HIDDEN);
+    }
+    setMatrixChecked(S->modViewSel, idx);
+}
+
+void modViewEvent(lv_event_t* e) {
+    showModView(static_cast<int>(lv_buttonmatrix_get_selected_button(lv_event_get_target_obj(e))));
+}
+
+// Matrix: step a source/destination (user data: param id * 2 + (1 = next)).
+void modStepEvent(lv_event_t* e) {
+    intptr_t u = reinterpret_cast<intptr_t>(lv_event_get_user_data(e));
+    int id = static_cast<int>(u >> 1), dir = (u & 1) ? 1 : -1;
+    int count = static_cast<int>(kParams[id].max) + 1;
+    int v = (static_cast<int>(S->values[id]) + dir + count) % count;
+    setParamUi(id, static_cast<float>(v));
+}
+
+void modAmountEvent(lv_event_t* e) {
+    lv_obj_t* sl = lv_event_get_target_obj(e);
+    int id = static_cast<int>(reinterpret_cast<intptr_t>(lv_event_get_user_data(e)));
+    setParamUi(id, lv_slider_get_value(sl) / 100.0f);
+    showParamReadout(id);
+}
+
+lv_obj_t* modStepper(lv_obj_t* parent, int id, int labelW) {
+    button(parent, LV_SYMBOL_LEFT, 28, 32, modStepEvent, reinterpret_cast<void*>(static_cast<intptr_t>(id * 2)));
+    lv_obj_t* l = label(parent, "", fLabel, kText);
+    lv_obj_set_width(l, labelW);
+    lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_CENTER, 0);
+    lv_label_set_long_mode(l, LV_LABEL_LONG_DOT);
+    S->paramLabel[id] = l;
+    button(parent, LV_SYMBOL_RIGHT, 28, 32, modStepEvent, reinterpret_cast<void*>(static_cast<intptr_t>(id * 2 + 1)));
+    return l;
+}
+
+lv_obj_t* modPanel(lv_obj_t* tab) {
+    lv_obj_t* p = panel(tab, 472, 198);
+    lv_obj_set_flex_flow(p, LV_FLEX_FLOW_ROW_WRAP);
+    lv_obj_set_flex_align(p, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_row(p, 4, 0);
+    return p;
+}
+
 void buildMod(lv_obj_t* tab) {
+    static const char* views[] = {"LFO 1", "LFO 2", "MATRIX", "PERFORM", ""};
     static const char* shapes[] = {"SIN", "TRI", "SAW", "SQR", "S&H", ""};
-    lv_obj_t* p1 = panel(tab, 472, 124);
-    lv_obj_set_flex_flow(p1, LV_FLEX_FLOW_ROW_WRAP);
-    lv_obj_set_flex_align(p1, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_row(p1, 2, 0);
-    label(p1, "LFO", fMed, kAccent);
-    S->lfoShape = buttonMatrix(p1, shapes, 230, 34, lfoShapeEvent);
-    S->lfoChart = chart(p1, 160, 34, -110, 110, kLfoPts, S->lfoY, &S->lfoSer, kAccent);
+    S->modViewSel = buttonMatrix(tab, views, 472, 30, modViewEvent);
+
+    // LFO 1
+    lv_obj_t* p1 = modPanel(tab);
+    S->lfoShape = buttonMatrix(p1, shapes, 250, 34, lfoShapeEvent);
+    S->lfoChart = chart(p1, 190, 34, -110, 110, kLfoPts, S->lfoY, &S->lfoSer, kAccent);
     knob(p1, P_LFO_RATE, "RATE");
+    knob(p1, P_LFO_SYNC, "SYNC");
     knob(p1, P_LFO_POS, "> POS");
     knob(p1, P_LFO_CUTOFF, "> CUTOFF");
     knob(p1, P_LFO_PITCH, "> PITCH");
-    knob(p1, P_LFO_SYNC, "SYNC");
     knob(p1, P_MENV_POS, "ENV>POS");
+    lv_obj_t* n1 = label(p1, "MOD WHEEL ADDS VIBRATO. MORE ROUTINGS IN MATRIX.", fLabel, kDim);
+    lv_obj_set_width(n1, 460);
+    S->modView[0] = p1;
 
-    lv_obj_t* p2 = panel(tab, 472, 108);
-    lv_obj_set_flex_flow(p2, LV_FLEX_FLOW_ROW_WRAP);
-    lv_obj_set_flex_align(p2, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_row(p2, 0, 0);
-    lv_obj_t* t = label(p2, "PERFORMANCE", fSmall, kAccent2);
-    lv_obj_set_width(t, 460);
-    knob(p2, P_VEL_AMP, "VEL>AMP");
-    knob(p2, P_GLIDE, "GLIDE");
-    knob(p2, P_BEND_RANGE, "BEND");
-    knob(p2, P_SPREAD, "SPREAD");
-    knob(p2, P_VOLUME, "PATCH VOL");
+    // LFO 2: a matrix source
+    lv_obj_t* p2 = modPanel(tab);
+    S->lfo2Shape = buttonMatrix(p2, shapes, 250, 34, lfo2ShapeEvent);
+    S->lfo2Chart = chart(p2, 190, 34, -110, 110, kLfoPts, S->lfo2Y, &S->lfo2Ser, kSignal);
+    knob(p2, P_LFO2_RATE, "RATE");
+    knob(p2, P_LFO2_SYNC, "SYNC");
+    lv_obj_t* n2 = label(p2, "LFO 2 GOES WHERE YOU ROUTE IT: PICK LFO 2 AS A SOURCE IN MATRIX.", fLabel, kDim);
+    lv_obj_set_width(n2, 300);
+    lv_label_set_long_mode(n2, LV_LABEL_LONG_WRAP);
+    S->modView[1] = p2;
+
+    // MATRIX: 4 slots
+    lv_obj_t* pm = panel(tab, 472, 198);
+    lv_obj_set_flex_flow(pm, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(pm, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    for (int k = 0; k < kModSlots; ++k) {
+        const int base = P_M1_SRC + 3 * k;
+        lv_obj_t* r = row(pm, 462, 40);
+        lv_obj_set_flex_align(r, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+        lv_obj_t* num = label(r, "", fBig, kDim);
+        lv_label_set_text_fmt(num, "%d", k + 1);
+        modStepper(r, base, 82);
+        modStepper(r, base + 1, 66);
+        lv_obj_t* sl = lv_slider_create(r);
+        lv_obj_set_size(sl, 74, 10);
+        lv_slider_set_range(sl, -100, 100);
+        lv_slider_set_mode(sl, LV_SLIDER_MODE_SYMMETRICAL);
+        lv_obj_set_style_radius(sl, 0, 0);
+        lv_obj_set_style_radius(sl, 0, LV_PART_INDICATOR);
+        lv_obj_set_style_radius(sl, 0, LV_PART_KNOB);
+        lv_obj_set_style_bg_opa(sl, LV_OPA_COVER, 0);
+        lv_obj_set_style_bg_opa(sl, LV_OPA_COVER, LV_PART_INDICATOR);
+        lv_obj_set_style_bg_color(sl, C(kLine2), 0);
+        lv_obj_set_style_bg_color(sl, C(kText), LV_PART_INDICATOR);
+        lv_obj_set_style_bg_color(sl, C(kSignal), LV_PART_KNOB);
+        lv_obj_set_style_pad_all(sl, 5, LV_PART_KNOB);
+        lv_obj_set_style_shadow_width(sl, 0, LV_PART_KNOB);
+        lv_obj_set_ext_click_area(sl, 12);
+        lv_obj_add_event_cb(sl, modAmountEvent, LV_EVENT_VALUE_CHANGED, reinterpret_cast<void*>(static_cast<intptr_t>(base + 2)));
+        lv_obj_t* val = label(r, "", fLabel, kText);
+        lv_obj_set_width(val, 34);
+        lv_obj_set_style_text_align(val, LV_TEXT_ALIGN_RIGHT, 0);
+        lv_obj_set_user_data(sl, val);
+        S->paramSlider[base + 2] = sl;
+        for (int j = 0; j < 3; ++j) showParamReadout(base + j);
+    }
+    S->modView[2] = pm;
+
+    // PERFORM
+    lv_obj_t* pp = modPanel(tab);
+    knob(pp, P_VEL_AMP, "VEL>AMP");
+    knob(pp, P_GLIDE, "GLIDE");
+    knob(pp, P_BEND_RANGE, "BEND");
+    knob(pp, P_SPREAD, "SPREAD");
+    knob(pp, P_VOLUME, "PATCH VOL");
+    S->modView[3] = pp;
+
     drawLfo();
+    drawLfo2();
+    showModView(0);
 }
 
 // KEYS ----------------------------------------------------------------------
@@ -2671,6 +2800,17 @@ bool uiSnapshot(const UiConfig& cfg, const std::string& dir) {
         syncFromEngine();
         shot(names[i]);
     }
+    lv_tabview_set_active(S->tabview, 3, LV_ANIM_OFF);
+    {
+        static const char* mv[] = {"", "4-mod-lfo2", "4-mod-matrix", "4-mod-perform"};
+        // a sample routing so the matrix shows something
+        S->values[P_M1_SRC] = 2; S->values[P_M1_DST] = 3; S->values[P_M1_AMT] = 0.4f;
+        S->values[P_M2_SRC] = 5; S->values[P_M2_DST] = 1; S->values[P_M2_AMT] = -0.6f;
+        for (int j = 0; j < 6; ++j) showParamReadout(P_M1_SRC + j);
+        for (int i = 1; i < 4; ++i) { showModView(i); shot(mv[i]); }
+        showModView(0);
+    }
+    lv_tabview_set_active(S->tabview, 7, LV_ANIM_OFF);
     static const char* secNames[] = {"", "7-settings-bluetooth", "7-settings-studio", "7-settings-audio", "7-settings-display",
                                      "7-settings-system"};
     for (int i = 1; i < 6; ++i) { showSettingsSection(i); shot(secNames[i]); }
