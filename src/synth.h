@@ -71,15 +71,18 @@ private:
         bool held = false;  // released while sustain pedal down
         uint64_t age = 0;
         Env amp, mod;
-        float phaseA[kMaxUnison] = {}, phaseB[kMaxUnison] = {};
+        uint32_t phaseA[kMaxUnison] = {}, phaseB[kMaxUnison] = {};   // 32-bit fixed point: one cycle = 2^32
         Svf filtL, filtR;
+        Ladder ladL, ladR;
+        Comb combL, combR;
+        float subPhase = 0;
         float rnd = 0;  // per-note random (mod matrix source)
     };
 
     void renderBlock(float* left, float* right, int n);
     void renderVoice(Voice& v, float* outL, float* outR, int n);
     void renderOsc(const Wavetable& wt, float pos, float pitch, float level, int unison,
-                   float detune, float* phases, float* bufL, float* bufR, int n);
+                   float detune, uint32_t* phases, float* bufL, float* bufR, int n);
     void startVoice(Voice& v, int note, int velocity, bool fresh);
     void voiceOn(int note, int velocity);
     void voiceOff(int note);

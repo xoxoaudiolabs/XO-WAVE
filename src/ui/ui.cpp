@@ -114,7 +114,7 @@ struct State {
     lv_obj_t* oscSelect = nullptr;
     lv_obj_t* tableName = nullptr;
     lv_obj_t* frameLabel = nullptr;
-    lv_obj_t* knobRow[2] = {};
+    lv_obj_t* knobRow[3] = {};   // OSC A, OSC B, SUB
     lv_obj_t* terrain = nullptr;          // 3D wavetable canvas
     std::vector<uint16_t> terrainBuf;
     float terrainPos = -1;                // position last drawn
@@ -516,9 +516,12 @@ void line(int x0, int y0, int x1, int y1, uint16_t c, bool thick) {
     }
 }
 
+// The wavetable shown/edited on the OSC page: B when OSC B is picked, else A (SUB shows A).
+int wtOsc() { return S->focusOsc == 1 ? 1 : 0; }
+
 void drawTerrain() {
     if (!S->terrain || !S->cfg.tables || S->cfg.tables->empty()) return;
-    const int osc = S->focusOsc;
+    const int osc = wtOsc();
     const int tIdx = std::clamp(static_cast<int>(S->values[osc ? P_B_TABLE : P_A_TABLE]), 0, S->numTables - 1);
     const Wavetable& wt = (*S->cfg.tables)[static_cast<size_t>(tIdx)];
     float pos = S->cfg.status ? S->cfg.status->livePos[osc].load() : S->values[osc ? P_B_POS : P_A_POS];
@@ -580,21 +583,42 @@ void drawWave(int osc) {
     if (osc == S->focusOsc) drawTerrain();
 }
 
+// Filter type buttons (2 x 3) <-> filter_mode values.
+static const int kBtnToMode[6] = {0, 3, 1, 4, 2, 5};   // LP12 LP24 / BP NOTCH / HP COMB
+static const int kModeToBtn[6] = {0, 2, 4, 1, 3, 5};
+
 void drawFilter() {
     if (!S->filterChart) return;
     float fc = S->values[P_CUTOFF];
-    float k = 2.0f - 1.96f * S->values[P_RESO];
-    int mode = static_cast<int>(S->values[P_FILTER_MODE]);
+    float reso = S->values[P_RESO];
+    float k = 2.0f - 1.96f * reso;
+    int mode = std::clamp(static_cast<int>(S->values[P_FILTER_MODE]), 0, 5);
     for (int i = 0; i < kFiltPts; ++i) {
         float f = 20.0f * std::pow(1000.0f, static_cast<float>(i) / (kFiltPts - 1));  // 20 Hz .. 20 kHz
         float w = f / fc;
         float den = std::sqrt((1 - w * w) * (1 - w * w) + (k * w) * (k * w));
-        float mag = mode == 0 ? 1.0f / den : (mode == 1 ? k * w / den : w * w / den);
+        float mag;
+        switch (mode) {
+            case 1: mag = k * w / den; break;                        // band
+            case 2: mag = w * w / den; break;                        // high
+            case 3: {                                                // ladder: 4 poles, sharper peak
+                float lp = 1.0f / std::sqrt((1 - w * w) * (1 - w * w) + (1.4f * (1 - reso) * w + 0.05f) * (1.4f * (1 - reso) * w + 0.05f));
+                mag = std::min(lp, 1.0f + 6.0f * reso) * (w > 1 ? 1.0f / (w * w) : 1.0f);
+                break;
+            }
+            case 4: mag = std::fabs(1 - w * w) / den; break;         // notch
+            case 5: {                                                // comb: peaks at multiples of the cutoff
+                float fb = 0.5f + 0.48f * reso;
+                mag = 0.5f / std::sqrt(1 - 2 * fb * std::cos(2 * 3.14159265f * w) + fb * fb);
+                break;
+            }
+            default: mag = 1.0f / den; break;                        // low 12 dB
+        }
         float db = 20.0f * std::log10(std::max(mag, 1e-4f));
         S->filterY[i] = static_cast<int32_t>(std::clamp(db, -48.0f, 24.0f));
     }
     lv_chart_refresh(S->filterChart);
-    setMatrixChecked(S->filterMode, mode);
+    setMatrixChecked(S->filterMode, kModeToBtn[mode]);
 }
 
 void drawEnv(int which) {
@@ -693,7 +717,7 @@ lv_obj_t* addTab(const char* name) {
 
 void terrainEvent(lv_event_t* e) {
     lv_event_code_t code = lv_event_get_code(e);
-    int id = S->focusOsc ? P_B_POS : P_A_POS;
+    int id = wtOsc() ? P_B_POS : P_A_POS;
     if (code == LV_EVENT_PRESSED) {
         S->terrainDragPos = S->values[id];
     } else if (code == LV_EVENT_PRESSING) {
@@ -715,8 +739,10 @@ void rememberView(const char* key, int value) {
 void setFocusOsc(int osc) {
     S->focusOsc = osc;
     rememberView("ui.osc", osc);
-    lv_obj_add_flag(S->knobRow[1 - osc], LV_OBJ_FLAG_HIDDEN);
-    lv_obj_remove_flag(S->knobRow[osc], LV_OBJ_FLAG_HIDDEN);
+    for (int i = 0; i < 3; ++i) {
+        if (i == osc) lv_obj_remove_flag(S->knobRow[i], LV_OBJ_FLAG_HIDDEN);
+        else lv_obj_add_flag(S->knobRow[i], LV_OBJ_FLAG_HIDDEN);
+    }
     setMatrixChecked(S->oscSelect, osc);
     drawTerrain();
 }
@@ -727,7 +753,7 @@ void oscSelectEvent(lv_event_t* e) {
 
 void tableStepFocus(lv_event_t* e) {
     int dir = static_cast<int>(reinterpret_cast<intptr_t>(lv_event_get_user_data(e)));
-    int id = S->focusOsc ? P_B_TABLE : P_A_TABLE;
+    int id = wtOsc() ? P_B_TABLE : P_A_TABLE;
     int next = (static_cast<int>(S->values[id]) + dir + S->numTables) % S->numTables;
     setParamUi(id, static_cast<float>(next));
     drawTerrain();
@@ -750,7 +776,7 @@ void buildOsc(lv_obj_t* tab) {
     lv_obj_align(S->frameLabel, LV_ALIGN_TOP_RIGHT, -2, 0);
 
     // side: oscillator select + wavetable select
-    static const char* oscMap[] = {"OSC A", "OSC B", ""};
+    static const char* oscMap[] = {"OSC A", "OSC B", "SUB", ""};
     lv_obj_t* side = panel(tab, 156, 158);
     lv_obj_set_flex_flow(side, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(side, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
@@ -780,25 +806,36 @@ void buildOsc(lv_obj_t* tab) {
         knob(r, base + 6, "DETUNE");
         S->knobRow[osc] = r;
     }
+    {   // SUB: sub oscillator + noise
+        lv_obj_t* r = panel(tab, 472, 74);
+        lv_obj_set_flex_flow(r, LV_FLEX_FLOW_ROW);
+        lv_obj_set_flex_align(r, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+        lv_obj_set_style_pad_all(r, 0, 0);
+        knob(r, P_SUB_LEVEL, "SUB LEVEL");
+        knob(r, P_SUB_OCT, "OCTAVE");
+        knob(r, P_SUB_SHAPE, "SHAPE");
+        knob(r, P_NOISE, "NOISE");
+        S->knobRow[2] = r;
+    }
     setFocusOsc(0);
 }
 
 void filterModeEvent(lv_event_t* e) {
     lv_obj_t* m = lv_event_get_target_obj(e);
-    setParamUi(P_FILTER_MODE, static_cast<float>(lv_buttonmatrix_get_selected_button(m)));
+    setParamUi(P_FILTER_MODE, static_cast<float>(kBtnToMode[std::min(5u, lv_buttonmatrix_get_selected_button(m))]));
 }
 
 void buildFilter(lv_obj_t* tab) {
-    static const char* modes[] = {"LOW", "\n", "BAND", "\n", "HIGH", ""};
-    lv_obj_t* left = panel(tab, 96, 146);
+    static const char* modes[] = {"LP12", "LP24", "\n", "BP", "NOTCH", "\n", "HP", "COMB", ""};
+    lv_obj_t* left = panel(tab, 156, 146);
     lv_obj_set_flex_flow(left, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(left, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    label(left, "MODE", fSmall, kDim);
-    S->filterMode = buttonMatrix(left, modes, 84, 116, filterModeEvent);
+    label(left, "TYPE", fLabel, kDim);
+    S->filterMode = buttonMatrix(left, modes, 146, 116, filterModeEvent);
 
-    lv_obj_t* right = panel(tab, 368, 146);
-    label(right, "RESPONSE", fSmall, kDim);
-    S->filterChart = chart(right, 358, 120, -48, 24, kFiltPts, S->filterY, &S->filterSer, kAccent);
+    lv_obj_t* right = panel(tab, 308, 146);
+    label(right, "RESPONSE", fLabel, kDim);
+    S->filterChart = chart(right, 298, 120, -48, 24, kFiltPts, S->filterY, &S->filterSer, kAccent);
     lv_obj_align(S->filterChart, LV_ALIGN_BOTTOM_MID, 0, 0);
 
     lv_obj_t* knobs = panel(tab, 472, 86);
@@ -2327,8 +2364,8 @@ void syncFromEngine() {
     lv_obj_set_style_text_color(S->btIcon, C(btColor), 0);
 
     if (S->terrain && lv_tabview_get_tab_active(S->tabview) == 0) {
-        float live = st->livePos[S->focusOsc].load();
-        int tIdx = static_cast<int>(S->values[S->focusOsc ? P_B_TABLE : P_A_TABLE]);
+        float live = st->livePos[wtOsc()].load();
+        int tIdx = static_cast<int>(S->values[wtOsc() ? P_B_TABLE : P_A_TABLE]);
         if (std::fabs(live - S->terrainPos) > 0.004f || tIdx != S->terrainTable) drawTerrain();
     }
 
@@ -2381,7 +2418,7 @@ int stateInt(const char* key, int def, int lo, int hi) {
 void restoreView() {
     S->octave = stateInt("ui.octave", 3, 0, 7);
     showOctave();
-    setFocusOsc(stateInt("ui.osc", 0, 0, 1));
+    setFocusOsc(stateInt("ui.osc", 0, 0, 2));
     showSettingsSection(stateInt("ui.settings", 0, 0, 5));
     lv_tabview_set_active(S->tabview, 0, LV_ANIM_OFF);  // always start on OSC; everything else is kept
 }
@@ -2818,6 +2855,8 @@ bool uiSnapshot(const UiConfig& cfg, const std::string& dir) {
     lv_tabview_set_active(S->tabview, 0, LV_ANIM_OFF);
     setFocusOsc(1);
     shot("1-osc-b");
+    setFocusOsc(2);
+    shot("1-osc-sub");
     setFocusOsc(0);
     openVolume(nullptr);
     shot("8-volume");

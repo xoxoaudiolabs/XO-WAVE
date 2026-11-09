@@ -118,7 +118,59 @@ struct Svf {
         ic2 = 2.0f * v2 - ic2;
         if (mode == 0) return v2;
         if (mode == 1) return v1;
+        if (mode == 3) return v0 - c.k * v1;   // notch (low + high)
         return v0 - c.k * v1 - v2;
+    }
+};
+
+// ---------------------------------------------------------------------------
+// 24 dB/oct ladder low-pass (the classic "Moog" topology, cheap variant with a
+// cubic soft-clip in the last stage). resonance 0..1 (self-oscillates near 1).
+struct LadderCoefs {
+    float p = 0, f = 0, q = 0;
+    void set(float cutoffHz, float resonance, float sampleRate) {
+        float fc = clampf(2.0f * cutoffHz / sampleRate, 0.0005f, 0.85f);
+        float q1 = 1.0f - fc;
+        p = fc + 0.8f * fc * q1;
+        f = p + p - 1.0f;
+        q = clampf(resonance, 0.0f, 1.0f) * 0.98f * (1.0f + 0.5f * q1 * (1.0f - q1 + 5.6f * q1 * q1));
+    }
+};
+
+struct Ladder {
+    float b0 = 0, b1 = 0, b2 = 0, b3 = 0, b4 = 0;
+    void reset() { b0 = b1 = b2 = b3 = b4 = 0; }
+    inline float process(float in, const LadderCoefs& c) {
+        in -= c.q * b4;
+        float t1 = b1, t2 = b2;
+        b1 = (in + b0) * c.p - b1 * c.f;
+        b2 = (b1 + t1) * c.p - b2 * c.f;
+        t1 = b3;
+        b3 = (b2 + t2) * c.p - b3 * c.f;
+        b4 = (b3 + t1) * c.p - b4 * c.f;
+        b4 = clampf(b4 - b4 * b4 * b4 * 0.166667f, -1.5f, 1.5f);
+        b0 = in;
+        return b4;
+    }
+};
+
+// Feedback comb tuned by the cutoff (a pitched, metallic resonator).
+struct Comb {
+    static constexpr int kLen = 2048;   // lowest tuning: sample rate / 2048 (~23 Hz)
+    float buf[kLen] = {};
+    int w = 0;
+    void reset() { for (float& x : buf) x = 0; w = 0; }
+    inline float process(float x, float delay, float feedback) {
+        float pos = static_cast<float>(w) - delay;
+        if (pos < 0) pos += kLen;
+        int i0 = static_cast<int>(pos);
+        float fr = pos - static_cast<float>(i0);
+        int i1 = i0 + 1 >= kLen ? 0 : i0 + 1;
+        float d = buf[i0] + fr * (buf[i1] - buf[i0]);
+        float y = x + feedback * d;
+        buf[w] = softClip(y);
+        if (++w >= kLen) w = 0;
+        return y * 0.5f;
     }
 };
 

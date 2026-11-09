@@ -5,7 +5,7 @@
 UNAME_S := $(shell uname -s)
 UNAME_M := $(shell uname -m)
 
-CXXFLAGS ?= -O3 -ffast-math
+CXXFLAGS ?= -O3 -ffast-math -funroll-loops
 CXXFLAGS += -std=c++17 -Wall -Wextra -MMD -MP
 LVGL_FLAGS := -DLV_CONF_INCLUDE_SIMPLE -Isrc -Ithird_party/lvgl
 CFLAGS ?= -O2

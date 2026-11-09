@@ -64,12 +64,13 @@ int main() {
         s.setParam(P_RESO, 1); s.setParam(P_DRIVE, 1); s.setParam(P_A_UNISON, 4); s.setParam(P_B_UNISON, 4);
         s.setParam(P_B_LEVEL, 1); s.setParam(P_LFO_RATE, 20); s.setParam(P_LFO_CUTOFF, 1); s.setParam(P_LFO_POS, 1);
         s.setParam(P_FENV, 1); s.setParam(P_VOLUME, 1);
+        s.setParam(P_SUB_LEVEL, 1); s.setParam(P_SUB_SHAPE, 1); s.setParam(P_NOISE, 1);
         bool ok = true;
         float peak = 0;
         std::vector<float> L(128), R(128);
         for (int t = 0; t < static_cast<int>(tables.size()); ++t) {
             s.setParam(P_A_TABLE, static_cast<float>(t)); s.setParam(P_B_TABLE, static_cast<float>((t + 3) % tables.size()));
-            for (int mode = 0; mode < 3; ++mode) {
+            for (int mode = 0; mode < 6; ++mode) {   // LP12 BP HP LP24 NOTCH COMB
                 s.setParam(P_FILTER_MODE, static_cast<float>(mode));
                 for (int n = 0; n < 16; ++n) s.noteOn(20 + n * 7, 127);
                 for (int b = 0; b < 200; ++b) {
@@ -84,7 +85,7 @@ int main() {
             }
         }
         std::printf("    finite=%d peak=%.4f\n", ok, peak);
-        check(ok && peak <= 1.0001f, "all tables / filter modes / max resonance+drive: finite, within +/-1");
+        check(ok && peak <= 1.0001f, "all tables / 6 filter types / max resonance+drive, sub + noise: finite, within +/-1");
     }
 
     {  // 3. Voice stealing: many fast notes on 4 voices, no huge jumps.
@@ -209,6 +210,20 @@ int main() {
         char msg[120];
         std::snprintf(msg, sizeof msg, "mod matrix VELOCITY>A LEVEL -100%%: hard hit %.4f (silent), soft %.3f", hard, soft);
         check(hard < 0.001f && soft > 0.02f, msg);
+    }
+
+    {  // 10. Sub oscillator alone: one octave under middle C (130.8 Hz).
+        Synth s(sr, 8, tables);
+        s.setParam(P_A_LEVEL, 0); s.setParam(P_SUB_LEVEL, 1); s.setParam(P_SUB_OCT, 1);
+        s.setParam(P_CUTOFF, 20000); s.setParam(P_AMP_S, 1);
+        std::vector<float> L(48000), R(48000);
+        s.noteOn(60, 100);
+        s.render(L.data(), R.data(), 48000);
+        int crossings = 0;
+        for (int i = 24001; i < 48000; ++i) if (L[i - 1] < 0 && L[i] >= 0) ++crossings;   // over 0.5 s
+        char msg[96];
+        std::snprintf(msg, sizeof msg, "sub oscillator -1 oct on C4: %.1f Hz (130.8)", crossings * 2.0);
+        check(std::abs(crossings * 2 - 131) <= 3, msg);
     }
 
     std::printf(failures ? "\n%d check(s) failed\n" : "\nall checks passed\n", failures);

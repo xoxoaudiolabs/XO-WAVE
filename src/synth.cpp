@@ -55,13 +55,18 @@ void Synth::startVoice(Voice& v, int note, int velocity, bool fresh) {
     if (fresh) {
         v.filtL.reset();
         v.filtR.reset();
+        v.ladL.reset();
+        v.ladR.reset();
+        v.combL.reset();
+        v.combR.reset();
+        v.subPhase = 0;
         v.amp.kill();
         v.mod.kill();
         int uniA = static_cast<int>(target_[P_A_UNISON]);
         int uniB = static_cast<int>(target_[P_B_UNISON]);
         for (int u = 0; u < kMaxUnison; ++u) {
-            v.phaseA[u] = (uniA == 1 && u == 0) ? 0.0f : rng_.uni();
-            v.phaseB[u] = (uniB == 1 && u == 0) ? 0.0f : rng_.uni();
+            v.phaseA[u] = (uniA == 1 && u == 0) ? 0u : rng_.next();
+            v.phaseB[u] = (uniB == 1 && u == 0) ? 0u : rng_.next();
         }
     }
     if (fresh || v.note != note) v.pitch = (target_[P_GLIDE] > 0.0005f) ? lastPitch_ : static_cast<float>(note);
@@ -503,14 +508,53 @@ void Synth::renderVoice(Voice& v, float* outL, float* outR, int n) {
                   static_cast<int>(target_[P_B_UNISON]), smooth_[P_B_DETUNE], v.phaseB, bufL, bufR, n);
     }
 
+    // Sub oscillator (follows the played pitch) and noise, into the filter with the oscillators.
+    const float subLevel = smooth_[P_SUB_LEVEL], noise = smooth_[P_NOISE];
+    if (subLevel > 1e-4f) {
+        const float inc = std::min(midiToHz(basePitch - 12.0f * target_[P_SUB_OCT]) / sr_, 0.45f);
+        const bool square = target_[P_SUB_SHAPE] >= 0.5f;
+        const float g = subLevel * 0.7f;
+        auto blep = [inc](float t) {
+            if (t < inc) { t /= inc; return t + t - t * t - 1.0f; }
+            if (t > 1.0f - inc) { t = (t - 1.0f) / inc; return t * t + t + t + 1.0f; }
+            return 0.0f;
+        };
+        for (int i = 0; i < n; ++i) {
+            float ph = v.subPhase, x;
+            if (square) {
+                float t2 = ph + 0.5f;
+                if (t2 >= 1.0f) t2 -= 1.0f;
+                x = (ph < 0.5f ? 1.0f : -1.0f) + blep(ph) - blep(t2);
+            } else {
+                x = std::sin(2.0f * kPi * ph);
+            }
+            bufL[i] += x * g;
+            bufR[i] += x * g;
+            ph += inc;
+            v.subPhase = ph >= 1.0f ? ph - 1.0f : ph;
+        }
+    }
+    if (noise > 1e-4f) {
+        for (int i = 0; i < n; ++i) { bufL[i] += rng_.bi() * noise * 0.5f; bufR[i] += rng_.bi() * noise * 0.5f; }
+    }
+
     // Filter.
     const float velF = (1.0f - smooth_[P_VEL_FILTER]) + smooth_[P_VEL_FILTER] * v.vel;
     const float octaves = smooth_[P_FENV] * 6.0f * modEnv * velF +
                           smooth_[P_FKEY] * (v.pitch - 60.0f) * (1.0f / 12.0f) +
                           lfoValue_ * smooth_[P_LFO_CUTOFF] * 3.0f + mDst[3] * 6.0f;   // CUTOFF: +/-6 octaves
-    SvfCoefs c;
-    c.set(smooth_[P_CUTOFF] * std::exp2(octaves), clampf(smooth_[P_RESO] + mDst[4], 0.0f, 1.0f), sr_);
+    const float cutoffHz = smooth_[P_CUTOFF] * std::exp2(octaves);
+    const float reso = clampf(smooth_[P_RESO] + mDst[4], 0.0f, 1.0f);
     const int mode = static_cast<int>(target_[P_FILTER_MODE]);
+    SvfCoefs c;
+    LadderCoefs lc;
+    float combDelay = 0, combFb = 0;
+    if (mode == 3) lc.set(cutoffHz, reso, sr_);
+    else if (mode == 5) {
+        combDelay = clampf(sr_ / clampf(cutoffHz, 25.0f, sr_ * 0.45f), 2.0f, Comb::kLen - 4.0f);
+        combFb = 0.5f + 0.48f * reso;
+    } else c.set(cutoffHz, reso, sr_);
+    const int svfMode = mode == 4 ? 3 : mode;   // NOTCH
     const float drive = clampf(smooth_[P_DRIVE] + mDst[8], 0.0f, 1.0f);
     const float driveGain = 1.0f + drive * 6.0f;
     const float velA = (1.0f - smooth_[P_VEL_AMP]) + smooth_[P_VEL_AMP] * v.vel;
@@ -518,8 +562,9 @@ void Synth::renderVoice(Voice& v, float* outL, float* outR, int n) {
     for (int i = 0; i < n; ++i) {
         float l = bufL[i], r = bufR[i];
         if (drive > 0.001f) { l = softClip(l * driveGain); r = softClip(r * driveGain); }
-        l = v.filtL.process(l, c, mode);
-        r = v.filtR.process(r, c, mode);
+        if (mode == 3) { l = v.ladL.process(l, lc); r = v.ladR.process(r, lc); }
+        else if (mode == 5) { l = v.combL.process(l, combDelay, combFb); r = v.combR.process(r, combDelay, combFb); }
+        else { l = v.filtL.process(l, c, svfMode); r = v.filtR.process(r, c, svfMode); }
         float a = v.amp.next(ampCoefs_) * velA;
         outL[i] += l * a;
         outR[i] += r * a;
@@ -533,7 +578,7 @@ void Synth::renderVoice(Voice& v, float* outL, float* outR, int n) {
 }
 
 void Synth::renderOsc(const Wavetable& wt, float pos, float pitch, float level, int unison,
-                      float detune, float* phases, float* bufL, float* bufR, int n) {
+                      float detune, uint32_t* phases, float* bufL, float* bufR, int n) {
     const int frames = wt.numFrames();
     const float fpos = pos * (frames - 1);
     int f0 = static_cast<int>(fpos);
@@ -553,18 +598,32 @@ void Synth::renderOsc(const Wavetable& wt, float pos, float pitch, float level, 
         const float* t0 = wt.table(f0, mip);
         const float* t1 = wt.table(f1, mip);
         const float gl = g * panL_[unison][u], gr = g * panR_[unison][u];
-        float ph = phases[u];
-        for (int i = 0; i < n; ++i) {
-            float x = ph * Wavetable::kSize;
-            int i0 = static_cast<int>(x);
-            float fr = x - i0;
-            float a = t0[i0] + fr * (t0[i0 + 1] - t0[i0]);
-            float b = t1[i0] + fr * (t1[i0 + 1] - t1[i0]);
-            float s = a + ff * (b - a);
-            bufL[i] += s * gl;
-            bufR[i] += s * gr;
-            ph += inc;
-            if (ph >= 1.0f) ph -= 1.0f;
+        // Fixed-point phase: the top 11 bits index the 2048-sample table, the
+        // next 21 are the fraction; wrapping is free (unsigned overflow).
+        constexpr int kFracBits = 32 - 11;
+        constexpr float kFracScale = 1.0f / static_cast<float>(1u << kFracBits);
+        const uint32_t dph = static_cast<uint32_t>(inc * 4294967296.0);
+        uint32_t ph = phases[u];
+        if (f0 == f1 || ff < 1e-4f) {   // on a single frame: half the reads
+            for (int i = 0; i < n; ++i) {
+                const uint32_t i0 = ph >> kFracBits;
+                const float fr = static_cast<float>(ph & ((1u << kFracBits) - 1)) * kFracScale;
+                const float s = t0[i0] + fr * (t0[i0 + 1] - t0[i0]);
+                bufL[i] += s * gl;
+                bufR[i] += s * gr;
+                ph += dph;
+            }
+        } else {
+            for (int i = 0; i < n; ++i) {
+                const uint32_t i0 = ph >> kFracBits;
+                const float fr = static_cast<float>(ph & ((1u << kFracBits) - 1)) * kFracScale;
+                const float a = t0[i0] + fr * (t0[i0 + 1] - t0[i0]);
+                const float b = t1[i0] + fr * (t1[i0 + 1] - t1[i0]);
+                const float s = a + ff * (b - a);
+                bufL[i] += s * gl;
+                bufR[i] += s * gr;
+                ph += dph;
+            }
         }
         phases[u] = ph;
     }

@@ -26,7 +26,7 @@ const ParamInfo kParams[P_COUNT] = {
     {"b_unison", 1, 4, 1, LIN, true, "Osc B unison voices"},
     {"b_detune", 0, 50, 12, LIN, false, "Osc B unison detune (cents)"},
     {"spread", 0, 1, 0.6f, LIN, false, "Unison stereo width"},
-    {"filter_mode", 0, 2, 0, LIN, true, "0 low-pass, 1 band-pass, 2 high-pass"},
+    {"filter_mode", 0, 5, 0, LIN, true, "0 low-pass 12, 1 band-pass, 2 high-pass, 3 low-pass 24 (ladder), 4 notch, 5 comb"},
     {"cutoff", 20, 20000, 8000, EXP, false, "Filter cutoff (Hz)"},
     {"resonance", 0, 1, 0.2f, LIN, false, "Filter resonance"},
     {"filter_env", -1, 1, 0.3f, LIN, false, "Mod envelope -> cutoff (x6 octaves)"},
@@ -86,6 +86,10 @@ const ParamInfo kParams[P_COUNT] = {
     {"mod4_src", 0, 9, 0, LIN, true, "Mod slot 4 source"},
     {"mod4_dst", 0, 8, 0, LIN, true, "Mod slot 4 destination"},
     {"mod4_amt", -1, 1, 0, LIN, false, "Mod slot 4 amount"},
+    {"sub_level", 0, 1, 0, LIN, false, "Sub oscillator level"},
+    {"sub_octave", 1, 2, 1, LIN, true, "Sub oscillator: 1 or 2 octaves down"},
+    {"sub_shape", 0, 1, 0, LIN, true, "Sub oscillator: 0 sine, 1 square"},
+    {"noise", 0, 1, 0, LIN, false, "Noise level"},
 };
 
 const char* const kModSourceNames[kModSources] = {"OFF", "LFO 1", "LFO 2", "MOD ENV", "AMP ENV",
@@ -145,8 +149,8 @@ void paramFormat(int id, float v, char* out, int len, const char* const* tableNa
             return;
         }
         case P_FILTER_MODE: {
-            static const char* m[] = {"LP", "BP", "HP"};
-            std::snprintf(out, len, "%s", m[std::clamp(static_cast<int>(v), 0, 2)]);
+            static const char* m[] = {"LP12", "BP", "HP", "LP24", "NOTCH", "COMB"};
+            std::snprintf(out, len, "%s", m[std::clamp(static_cast<int>(v), 0, 5)]);
             return;
         }
         case P_LFO_SHAPE: {
@@ -175,6 +179,12 @@ void paramFormat(int id, float v, char* out, int len, const char* const* tableNa
             std::snprintf(out, len, "%s", m[std::clamp(static_cast<int>(v), 0, 8)]);
             return;
         }
+        case P_SUB_OCT:
+            std::snprintf(out, len, "-%d OCT", static_cast<int>(v));
+            return;
+        case P_SUB_SHAPE:
+            std::snprintf(out, len, "%s", v >= 0.5f ? "SQUARE" : "SINE");
+            return;
         case P_ARP_OCT:
             std::snprintf(out, len, "%d OCT", static_cast<int>(v));
             return;

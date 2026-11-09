@@ -217,6 +217,9 @@ static int bench(Synth& synth, int rate, int voices) {
     synth.setParam(P_AMP_S, 1.0f);
     // ... with every effect on.
     for (int id : {P_CHORUS_MIX, P_DELAY_MIX, P_REVERB_MIX, P_FX_DRIVE}) synth.setParam(id, 0.5f);
+    synth.setParam(P_FILTER_MODE, 3);   // the ladder (the dearest filter) ...
+    synth.setParam(P_SUB_LEVEL, 0.5f);  // ... with the sub and noise on
+    synth.setParam(P_NOISE, 0.2f);
     for (int i = 0; i < voices; ++i) synth.noteOn(40 + i * 3, 100);
 
     const int block = 128;
@@ -225,7 +228,7 @@ static int bench(Synth& synth, int rate, int voices) {
     auto t0 = std::chrono::steady_clock::now();
     for (int done = 0; done < seconds * rate; done += block) synth.render(L.data(), R.data(), block);
     double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
-    std::printf("%d voices x 2 osc x 4 unison + all FX: %.1f%% of one CPU core (%d active)\n", voices,
+    std::printf("%d voices x 2 osc x 4 unison + sub, noise, ladder, all FX: %.1f%% of one CPU core (%d active)\n", voices,
                 100.0 * elapsed / seconds, synth.activeVoices());
     return 0;
 }

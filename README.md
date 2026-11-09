@@ -83,7 +83,7 @@ Tabs along the bottom:
 | Tab | What's there |
 |---|---|
 | **OSC** | 3D wavetable view (the frame being played is drawn in signal red and follows modulation live). Drag on it to scan the table. OSC A / OSC B switch, wavetable picker, position, level, semi, fine, unison, detune |
-| **FILTER** | Low / band / high-pass, live response curve, cutoff, resonance, envelope amount, key tracking, drive, velocity |
+| **FILTER** | Six types: low-pass 12 dB, low-pass 24 dB (ladder), band, notch, high, comb (tuned by the cutoff); live response curve, cutoff, resonance, envelope amount, key tracking, drive, velocity |
 | **ENV** | Amp and mod envelopes with shape previews |
 | **MOD** | Four views: **LFO 1** (shape, rate free or synced, destinations), **LFO 2**, **MATRIX** (4 slots: LFO 1/2, mod env, amp env, velocity, mod wheel, aftertouch, key, per-note random → osc A/B position, cutoff, resonance, pitch, osc A/B level, drive, with amounts ±100%) and **PERFORM**: mod-env → position, velocity, glide, bend range, stereo spread, volume |
 | **FX** | Delay (free or synced to the tempo: 1/32 to 4 bars, triplets and dotted; feedback, tone, ping-pong), chorus, reverb (size, damping) and a bus drive before them |
@@ -132,6 +132,8 @@ Change these in `/etc/xowave.conf` (`cc.<number> = <parameter>`). `xowave --list
 
 - Presets are text files in `/opt/xowave/presets/*.xowave`, one `parameter = value` per line. Wavetables can be given by name, e.g. `a_table = Formant`. Copy one, edit it, then run `sudo systemctl restart xowave`.
 - Put Serum-style wavetable `.wav` files (2048 samples per frame) in `/opt/xowave/wavetables/`. They're added after the 10 built-in tables. `xowave -c /etc/xowave.conf --list-tables` shows their numbers.
+
+The OSC page's **SUB** view has a sub oscillator (sine or square, one or two octaves down) and noise.
 
 Built-in tables: Basic Shapes (sine→tri→saw→square), PWM, Sync Saw, Formant, FM, Wavefold, Organ, Digital, Harmonic Sweep, Grit.
 

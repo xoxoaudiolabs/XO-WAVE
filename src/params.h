@@ -31,6 +31,8 @@ enum ParamId {
     P_M2_SRC, P_M2_DST, P_M2_AMT,
     P_M3_SRC, P_M3_DST, P_M3_AMT,
     P_M4_SRC, P_M4_DST, P_M4_AMT,
+    // Sub oscillator + noise
+    P_SUB_LEVEL, P_SUB_OCT, P_SUB_SHAPE, P_NOISE,
     P_COUNT
 };
 
