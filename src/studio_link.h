@@ -30,6 +30,7 @@ namespace xo {
 struct MidiMsg {
     uint8_t len = 0;
     uint8_t b[3] = {};
+    double sent = -1;   // sender's clock (s) from the RTP-MIDI timestamp; -1 when unknown
 };
 
 class StudioLink {

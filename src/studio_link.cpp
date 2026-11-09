@@ -251,6 +251,7 @@ void decodeMidi(const uint8_t* p, int len, F&& emit) {
         if (i >= len) return;
         length = (length << 8) | p[i++];
     }
+    const double sent = get32(p + 4) / 10000.0;   // the sender's clock, 100 us units
     const uint8_t* d = p + i;
     int n = std::min(length, len - i);
     int k = 0, status = -1;
@@ -268,7 +269,7 @@ void decodeMidi(const uint8_t* p, int len, F&& emit) {
             ++k;
             continue;
         }
-        if (d[k] >= 0xF8) { MidiMsg m; m.len = 1; m.b[0] = d[k++]; emit(m); continue; }  // real time
+        if (d[k] >= 0xF8) { MidiMsg m; m.len = 1; m.b[0] = d[k++]; m.sent = sent; emit(m); continue; }  // real time
         if (d[k] & 0x80) status = d[k++];
         if (status < 0) break;
         int type = status & 0xF0;
@@ -614,6 +615,15 @@ void StudioLink::sendAudio(const float* left, const float* right, int n) {
 // ---------------------------------------------------------------------------
 
 void applyMidi(Synth& synth, const MidiMsg& m, int channel) {
+    if (m.len >= 1) {   // the Studio's clock: tempo, start, stop
+        switch (m.b[0]) {
+            case 0xF8: synth.midiClock(m.sent); return;   // timed by the Studio's own clock
+            case 0xFA: synth.midiStart(); return;
+            case 0xFB: synth.midiContinue(); return;
+            case 0xFC: synth.midiStop(); return;
+            default: break;
+        }
+    }
     if (m.len < 1 || m.b[0] < 0x80 || m.b[0] >= 0xF0) return;
     int ch = m.b[0] & 0x0F;
     if (channel != 0 && ch != channel - 1) return;

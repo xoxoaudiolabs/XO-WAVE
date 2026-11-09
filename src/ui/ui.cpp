@@ -138,6 +138,14 @@ struct State {
 
     // FX
     lv_obj_t* pingPong = nullptr;
+
+    // PLAY
+    lv_obj_t* arpMode = nullptr;
+    lv_obj_t* arpHoldBtn = nullptr;
+    lv_obj_t* tempoLabel = nullptr;
+    lv_obj_t* tempoSrc = nullptr;
+    float tempoShown = -1;
+    bool extShown = false;
     lv_chart_series_t* lfoSer = nullptr;
     int32_t lfoY[kLfoPts] = {};
 
@@ -148,6 +156,7 @@ struct State {
     lv_obj_t* octLabel = nullptr;
     lv_obj_t* holdBtn = nullptr;
     std::vector<lv_obj_t*> keys;  // user_data = note offset
+    lv_obj_t* cLabels[3] = {};    // the C labels on the keyboard
 
     // PRESETS
     lv_obj_t* presetList = nullptr;
@@ -635,6 +644,8 @@ void refreshViews(int id) {
         case P_MOD_A: case P_MOD_D: case P_MOD_S: case P_MOD_R: drawEnv(1); break;
         case P_LFO_SHAPE: drawLfo(); break;
         case P_DELAY_PP: setButtonOn(S->pingPong, S->values[P_DELAY_PP] >= 0.5f); break;
+        case P_ARP_MODE: setMatrixChecked(S->arpMode, static_cast<int>(S->values[P_ARP_MODE])); break;
+        case P_ARP_HOLD: setButtonOn(S->arpHoldBtn, S->values[P_ARP_HOLD] >= 0.5f); break;
         default: break;
     }
 }
@@ -862,6 +873,7 @@ void buildMod(lv_obj_t* tab) {
     knob(p1, P_LFO_POS, "> POS");
     knob(p1, P_LFO_CUTOFF, "> CUTOFF");
     knob(p1, P_LFO_PITCH, "> PITCH");
+    knob(p1, P_LFO_SYNC, "SYNC");
     knob(p1, P_MENV_POS, "ENV>POS");
 
     lv_obj_t* p2 = panel(tab, 472, 108);
@@ -909,11 +921,17 @@ void allNotesOffUi() {
     for (lv_obj_t* k : S->keys) lv_obj_remove_state(k, LV_STATE_CHECKED);
 }
 
+void showOctave() {
+    if (S->octLabel) lv_label_set_text_fmt(S->octLabel, "C%d", S->octave);
+    for (int i = 0; i < 3; ++i)
+        if (S->cLabels[i]) lv_label_set_text_fmt(S->cLabels[i], "C%d", S->octave + i);
+}
+
 void octaveEvent(lv_event_t* e) {
     int dir = static_cast<int>(reinterpret_cast<intptr_t>(lv_event_get_user_data(e)));
     allNotesOffUi();
     S->octave = std::clamp(S->octave + dir, 0, 7);
-    lv_label_set_text_fmt(S->octLabel, "C%d", S->octave);
+    showOctave();
     rememberView("ui.octave", S->octave);
 }
 
@@ -925,17 +943,73 @@ void holdEvent(lv_event_t*) {
 
 void allOffEvent(lv_event_t*) { allNotesOffUi(); }
 
-void buildKeys(lv_obj_t* tab) {
-    lv_obj_t* bar = row(tab, 472, 40);
-    button(bar, LV_SYMBOL_MINUS " OCT", 84, 34, octaveEvent, reinterpret_cast<void*>(static_cast<intptr_t>(-1)));
-    S->octLabel = label(bar, "C3", fBig, kAccent);
-    button(bar, LV_SYMBOL_PLUS " OCT", 84, 34, octaveEvent, reinterpret_cast<void*>(static_cast<intptr_t>(1)));
-    S->holdBtn = button(bar, "HOLD", 84, 34, holdEvent);
-    button(bar, "ALL OFF", 96, 34, allOffEvent);
+void arpModeEvent(lv_event_t* e) {
+    setParamUi(P_ARP_MODE, static_cast<float>(lv_buttonmatrix_get_selected_button(lv_event_get_target_obj(e))));
+}
 
+void arpHoldEvent(lv_event_t*) { setParamUi(P_ARP_HOLD, S->values[P_ARP_HOLD] >= 0.5f ? 0.0f : 1.0f); }
+
+void showTempo() {
+    if (!S->tempoLabel || !S->cfg.status) return;
+    bool ext = S->cfg.status->extClock.load();
+    float bpm = ext ? S->cfg.status->bpmNow.load() : S->cfg.status->tempo.load();
+    if (bpm == S->tempoShown && ext == S->extShown) return;
+    S->tempoShown = bpm;
+    S->extShown = ext;
+    if (std::fabs(bpm - std::round(bpm)) < 0.05f) lv_label_set_text_fmt(S->tempoLabel, "%d", static_cast<int>(std::lround(bpm)));
+    else lv_label_set_text_fmt(S->tempoLabel, "%.1f", bpm);
+    lv_label_set_text(S->tempoSrc, ext ? "BPM  MIDI CLOCK" : "BPM  INTERNAL");
+    lv_obj_set_style_text_color(S->tempoSrc, C(ext ? kSignal : kDim), 0);
+}
+
+void tempoStep(lv_event_t* e) {
+    if (!S->cfg.status) return;
+    int dir = static_cast<int>(reinterpret_cast<intptr_t>(lv_event_get_user_data(e)));
+    float t = std::clamp(std::round(S->cfg.status->tempo.load()) + dir, 30.0f, 300.0f);
+    S->cfg.status->tempo.store(t);
+    markState("tempo", std::to_string(static_cast<int>(t)));
+    showTempo();
+}
+
+void buildKeys(lv_obj_t* tab) {
+    // Arpeggiator + tempo
+    static const char* modes[] = {"OFF", "UP", "DOWN", "UP/DN", "RAND", "PLAYED", ""};
+    lv_obj_t* top = row(tab, 472, 34);
+    lv_obj_set_flex_align(top, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    S->arpMode = buttonMatrix(top, modes, 300, 32, arpModeEvent);
+    lv_obj_t* tm = button(top, LV_SYMBOL_MINUS, 30, 30, tempoStep, reinterpret_cast<void*>(static_cast<intptr_t>(-1)));
+    lv_obj_add_event_cb(tm, tempoStep, LV_EVENT_LONG_PRESSED_REPEAT, reinterpret_cast<void*>(static_cast<intptr_t>(-1)));
+    lv_obj_t* tbox = lv_obj_create(top);
+    lv_obj_remove_style_all(tbox);
+    lv_obj_set_size(tbox, 92, 34);
+    lv_obj_remove_flag(tbox, LV_OBJ_FLAG_SCROLLABLE);
+    S->tempoLabel = label(tbox, "", fBig, kText);
+    lv_obj_align(S->tempoLabel, LV_ALIGN_TOP_MID, 0, -4);
+    S->tempoSrc = label(tbox, "", fLabel, kDim);
+    lv_obj_set_style_text_font(S->tempoSrc, fSmall, 0);
+    lv_obj_set_style_text_letter_space(S->tempoSrc, 0, 0);
+    lv_obj_align(S->tempoSrc, LV_ALIGN_BOTTOM_MID, 0, 3);
+    lv_obj_t* tp = button(top, LV_SYMBOL_PLUS, 30, 30, tempoStep, reinterpret_cast<void*>(static_cast<intptr_t>(1)));
+    lv_obj_add_event_cb(tp, tempoStep, LV_EVENT_LONG_PRESSED_REPEAT, reinterpret_cast<void*>(static_cast<intptr_t>(1)));
+
+    lv_obj_t* knobs = row(tab, 472, 72);
+    knob(knobs, P_ARP_RATE, "RATE");
+    knob(knobs, P_ARP_OCT, "OCTAVES");
+    knob(knobs, P_ARP_GATE, "GATE");
+    knob(knobs, P_CHORD, "CHORD");
+    S->arpHoldBtn = button(knobs, "ARP HOLD", 100, 34, arpHoldEvent);
+
+    lv_obj_t* bar = row(tab, 472, 28);
+    button(bar, LV_SYMBOL_MINUS " OCT", 80, 26, octaveEvent, reinterpret_cast<void*>(static_cast<intptr_t>(-1)));
+    S->octLabel = label(bar, "C3", fMed, kText);
+    button(bar, LV_SYMBOL_PLUS " OCT", 80, 26, octaveEvent, reinterpret_cast<void*>(static_cast<intptr_t>(1)));
+    S->holdBtn = button(bar, "LATCH", 80, 26, holdEvent);
+    button(bar, "ALL OFF", 90, 26, allOffEvent);
+
+    const int kbH = 80;
     lv_obj_t* kb = lv_obj_create(tab);
     lv_obj_remove_style_all(kb);
-    lv_obj_set_size(kb, 472, 192);
+    lv_obj_set_size(kb, 472, kbH);
     lv_obj_remove_flag(kb, LV_OBJ_FLAG_SCROLLABLE);
 
     static const int whiteSemis[] = {0, 2, 4, 5, 7, 9, 11};
@@ -959,13 +1033,13 @@ void buildKeys(lv_obj_t* tab) {
         lv_obj_t* k = lv_obj_create(kb);
         styleKey(k, kText);
         lv_obj_set_pos(k, i * ww, 0);
-        lv_obj_set_size(k, ww, 192);
+        lv_obj_set_size(k, ww, kbH);
         int semi = 12 * (i / 7) + whiteSemis[i % 7];
         lv_obj_set_user_data(k, reinterpret_cast<void*>(static_cast<intptr_t>(semi)));
         if (i % 7 == 0) {
             lv_obj_t* l = label(k, "", fLabel, kDim);
-            lv_label_set_text_fmt(l, "C%d", i / 7);
-            lv_obj_align(l, LV_ALIGN_BOTTOM_MID, 0, -4);
+            S->cLabels[i / 7] = l;
+            lv_obj_align(l, LV_ALIGN_BOTTOM_MID, 0, -2);
         }
         S->keys.push_back(k);
     }
@@ -977,7 +1051,7 @@ void buildKeys(lv_obj_t* tab) {
             styleKey(k, kBg);
             int x = (oct * 7 + blackAfter[j] + 1) * ww - 10;
             lv_obj_set_pos(k, x, 0);
-            lv_obj_set_size(k, 20, 116);
+            lv_obj_set_size(k, 20, kbH * 6 / 10);
             lv_obj_set_user_data(k, reinterpret_cast<void*>(static_cast<intptr_t>(12 * oct + blackSemis[j])));
             S->keys.push_back(k);
         }
@@ -2132,6 +2206,7 @@ void syncFromEngine() {
     if (static_cast<int32_t>(now - S->sysNext) >= 0) { S->sysNext = now + 1000; updateSystemInfo(); updateLinkUi(); }
     if (S->btState.load() == 2) { S->btState = 0; showBtResults(); }
     pollLearn();
+    showTempo();
     if (S->midiInputsReady.exchange(false) && S->midiInputs) {
         std::lock_guard<std::mutex> lock(S->midiMutex);
         lv_label_set_text(S->midiInputs, S->midiInputsText.c_str());
@@ -2176,7 +2251,7 @@ int stateInt(const char* key, int def, int lo, int hi) {
 // Put the screen back exactly as it was before the last power-off.
 void restoreView() {
     S->octave = stateInt("ui.octave", 3, 0, 7);
-    if (S->octLabel) lv_label_set_text_fmt(S->octLabel, "C%d", S->octave);
+    showOctave();
     setFocusOsc(stateInt("ui.osc", 0, 0, 1));
     showSettingsSection(stateInt("ui.settings", 0, 0, 5));
     lv_tabview_set_active(S->tabview, 0, LV_ANIM_OFF);  // always start on OSC; everything else is kept
@@ -2207,7 +2282,9 @@ void buildUi() {
     buildEnv(addTab("ENV"));
     buildMod(addTab("MOD"));
     buildFx(addTab("FX"));
-    buildKeys(addTab("KEYS"));
+    buildKeys(addTab("PLAY"));
+    setMatrixChecked(S->arpMode, static_cast<int>(S->values[P_ARP_MODE]));
+    setButtonOn(S->arpHoldBtn, S->values[P_ARP_HOLD] >= 0.5f);
     buildPresets(addTab("PRESETS"));
     buildSettings(addTab("SETTINGS"));
     styleTabBar();
@@ -2588,7 +2665,7 @@ bool uiSnapshot(const UiConfig& cfg, const std::string& dir) {
         bool ok = writePng(path, kW, kH, gSnapRgb);
         std::printf("%s %s\n", ok ? "wrote" : "FAILED", path.c_str());
     };
-    static const char* names[] = {"1-osc-a", "2-filter", "3-env", "4-mod", "4b-fx", "5-keys", "6-presets", "7-settings-midi"};
+    static const char* names[] = {"1-osc-a", "2-filter", "3-env", "4-mod", "4b-fx", "5-play", "6-presets", "7-settings-midi"};
     for (uint32_t i = 0; i < 8; ++i) {
         lv_tabview_set_active(S->tabview, i, LV_ANIM_OFF);
         syncFromEngine();

@@ -339,8 +339,21 @@ static int runLive(const KeyValues& conf, const std::vector<Wavetable>& tables, 
         };
         uint32_t saved = gStatus.paramSerial.load(), seen = saved;
         int quiet = 0;
+        bool clockWas = false;
         while (!saverQuit.load()) {
             std::this_thread::sleep_for(std::chrono::milliseconds(500));
+            bool clock = gStatus.extClock.load();
+            static float bpmLogged = 0;   // log the clock's tempo when it changes
+            if (clock && std::fabs(gStatus.bpmNow.load() - bpmLogged) >= 0.5f && clockWas) {
+                bpmLogged = gStatus.bpmNow.load();
+                std::fprintf(stderr, "xowave: MIDI clock now %.1f BPM\n", bpmLogged);
+            }
+            if (clock && !clockWas) bpmLogged = gStatus.bpmNow.load();
+            if (clock != clockWas) {
+                clockWas = clock;
+                if (clock) std::fprintf(stderr, "xowave: following MIDI clock, %.1f BPM\n", gStatus.bpmNow.load());
+                else std::fprintf(stderr, "xowave: MIDI clock stopped; internal tempo %.0f BPM\n", gStatus.tempo.load());
+            }
             uint32_t now = gStatus.paramSerial.load(std::memory_order_acquire);
             if (now != seen) { seen = now; quiet = 0; continue; }
             if (seen != saved && ++quiet >= 2) { save(); saved = seen; }
@@ -457,7 +470,7 @@ int main(int argc, char** argv) {
         if (!statePath.empty() && readKeyValues(statePath, state)) {
             for (const auto& [k, v] : state) {
                 if (k.rfind("cc.", 0) == 0 || k == "midi.channel" || k == "audio.period" || k == "synth.voices" ||
-                    k == "bluetooth.latency_ms" || k == "master.volume" || k == "link.enabled")
+                    k == "bluetooth.latency_ms" || k == "master.volume" || k == "link.enabled" || k == "tempo")
                     conf[k] = v;
             }
         }
@@ -465,6 +478,7 @@ int main(int argc, char** argv) {
 
     gStatus.master.store(std::clamp(static_cast<float>(std::atof(kvGet(conf, "master.volume", "0.8").c_str())), 0.0f, 1.0f));
     std::fprintf(stderr, "xowave: master volume %.0f%%\n", gStatus.master.load() * 100);
+    gStatus.tempo.store(std::clamp(static_cast<float>(std::atof(kvGet(conf, "tempo", "120").c_str())), 30.0f, 300.0f));
 
 #ifndef XO_NO_ALSA
     // Splash on the touchscreen as early as possible, before the slow work.

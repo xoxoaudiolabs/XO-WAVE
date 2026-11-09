@@ -141,6 +141,56 @@ int main() {
         check(ok && peak <= 1.0001f && echo > 0.01f, msg);
     }
 
+    {  // 6. Chord memory: one key, a major chord.
+        Synth s(sr, 8, tables);
+        s.setParam(P_CHORD, 1);
+        std::vector<float> L(128), R(128);
+        s.noteOn(60, 100);
+        s.render(L.data(), R.data(), 128);
+        char msg[96];
+        std::snprintf(msg, sizeof msg, "chord memory MAJ: one key plays %d voices (3)", s.activeVoices());
+        check(s.activeVoices() == 3, msg);
+        s.noteOff(60);
+    }
+
+    {  // 7. Arpeggiator: 1/16 at the internal 120 BPM = 8 notes a second.
+        EngineStatus st;
+        Synth s(sr, 8, tables);
+        s.setStatus(&st);
+        s.setParam(P_ARP_MODE, 1); s.setParam(P_ARP_RATE, 3); s.setParam(P_ARP_GATE, 0.4f);
+        s.setParam(P_AMP_A, 0.001f); s.setParam(P_AMP_S, 1); s.setParam(P_AMP_R, 0.002f);
+        s.setParam(P_FX_DRIVE, 0); s.setParam(P_VEL_AMP, 0);
+        s.noteOn(60, 100); s.noteOn(64, 100); s.noteOn(67, 100);
+        std::vector<float> L(64), R(64);
+        int onsets = 0; bool loud = false;
+        for (int b = 0; b < static_cast<int>(sr * 2 / 64); ++b) {   // 2 s
+            s.render(L.data(), R.data(), 64);
+            float e = 0;
+            for (int i = 0; i < 64; ++i) e = std::max(e, std::fabs(L[i]));
+            if (!loud && e > 0.02f) { ++onsets; loud = true; }
+            if (loud && e < 0.002f) loud = false;
+        }
+        char msg[96];
+        std::snprintf(msg, sizeof msg, "arpeggiator 1/16 at 120 BPM: %d notes in 2 s (16)", onsets);
+        check(onsets >= 15 && onsets <= 17, msg);
+    }
+
+    {  // 8. MIDI clock: follows 125 BPM ticks, then falls back to the internal tempo.
+        EngineStatus st;
+        Synth s(sr, 8, tables);
+        s.setStatus(&st);
+        const int perTick = 960;   // 48000 * 60 / (125 * 24)
+        std::vector<float> L(perTick), R(perTick);
+        for (int t = 0; t < 24 * 8; ++t) { s.midiClock(); s.render(L.data(), R.data(), perTick); }
+        float following = st.bpmNow.load();
+        bool ext = st.extClock.load();
+        for (int b = 0; b < 60; ++b) s.render(L.data(), R.data(), perTick);   // 1.2 s without ticks
+        char msg[120];
+        std::snprintf(msg, sizeof msg, "MIDI clock: %.1f BPM while following (125), ext=%d, then %.1f (120)", following,
+                      ext, st.bpmNow.load());
+        check(ext && std::fabs(following - 125) < 0.6f && !st.extClock.load() && std::fabs(st.bpmNow.load() - 120) < 0.01f, msg);
+    }
+
     std::printf(failures ? "\n%d check(s) failed\n" : "\nall checks passed\n", failures);
     return failures ? 1 : 0;
 }

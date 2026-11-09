@@ -64,6 +64,13 @@ const ParamInfo kParams[P_COUNT] = {
     {"reverb_mix", 0, 1, 0, LIN, false, "Reverb amount"},
     {"reverb_size", 0, 1, 0.6f, LIN, false, "Reverb room size"},
     {"reverb_damp", 0, 1, 0.5f, LIN, false, "Reverb damping (darker when high)"},
+    {"lfo_sync", 0, 15, 0, LIN, true, "LFO sync: 0 free (rate in Hz), else a note division of the tempo"},
+    {"arp_mode", 0, 5, 0, LIN, true, "Arpeggiator: 0 off, 1 up, 2 down, 3 up/down, 4 random, 5 as played"},
+    {"arp_rate", 1, 15, 3, LIN, true, "Arpeggiator step (note division)"},
+    {"arp_octaves", 1, 4, 1, LIN, true, "Arpeggiator octave range"},
+    {"arp_gate", 0.05f, 1, 0.5f, LIN, false, "Arpeggiator note length (part of a step)"},
+    {"arp_hold", 0, 1, 0, LIN, true, "Arpeggiator hold: notes keep playing after the keys are let go"},
+    {"chord", 0, 8, 0, LIN, true, "Chord memory: 0 off, maj, min, 7, maj7, min7, sus4, 5th, oct"},
 };
 
 int findParam(const std::string& name) {
@@ -138,6 +145,24 @@ void paramFormat(int id, float v, char* out, int len, const char* const* tableNa
         case P_DELAY_TIME:
             fmtTime(v, out, len);
             return;
+        case P_ARP_MODE: {
+            static const char* m[] = {"OFF", "UP", "DOWN", "UP/DN", "RAND", "PLAYED"};
+            std::snprintf(out, len, "%s", m[std::clamp(static_cast<int>(v), 0, 5)]);
+            return;
+        }
+        case P_CHORD: {
+            static const char* m[] = {"OFF", "MAJ", "MIN", "7", "MAJ7", "MIN7", "SUS4", "5TH", "OCT"};
+            std::snprintf(out, len, "%s", m[std::clamp(static_cast<int>(v), 0, 8)]);
+            return;
+        }
+        case P_ARP_OCT:
+            std::snprintf(out, len, "%d OCT", static_cast<int>(v));
+            return;
+        case P_ARP_HOLD:
+            std::snprintf(out, len, "%s", v >= 0.5f ? "ON" : "OFF");
+            return;
+        case P_LFO_SYNC:
+        case P_ARP_RATE:
         case P_DELAY_SYNC: {
             static const char* d[] = {"FREE", "1/32", "1/16T", "1/16", "1/8T", "1/16D", "1/8", "1/4T",
                                       "1/8D", "1/4", "1/2T", "1/4D", "1/2", "1 BAR", "2 BARS", "4 BARS"};

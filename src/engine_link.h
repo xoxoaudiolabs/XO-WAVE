@@ -67,7 +67,10 @@ struct EngineStatus {
     // Settings the UI can change live.
     std::atomic<int> midiChannel{0};   // 0 = omni, 1..16
     std::atomic<float> master{0.8f};
-    std::atomic<int> linkState{0};     // XOXO Studio link: 0 off, 1 searching, 2 linked   // master volume 0..1 (fader position), global, not per preset
+    std::atomic<int> linkState{0};
+    std::atomic<float> tempo{120.0f};  // internal tempo (BPM), set on the screen; used without MIDI clock
+    std::atomic<float> bpmNow{120.0f}; // tempo in use (MIDI clock's when it's arriving)
+    std::atomic<bool> extClock{false}; // following MIDI clock (the Studio's or a USB device's)     // XOXO Studio link: 0 off, 1 searching, 2 linked   // master volume 0..1 (fader position), global, not per preset
     std::atomic<int> learnParam{-1};   // UI arms MIDI learn with a param id
     std::atomic<int> learnedCc{-1};    // engine reports the CC it bound
 };

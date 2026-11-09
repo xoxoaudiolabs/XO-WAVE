@@ -75,8 +75,8 @@ void Synth::startVoice(Voice& v, int note, int velocity, bool fresh) {
     lastPitch_ = static_cast<float>(note);
 }
 
-void Synth::noteOn(int note, int velocity) {
-    if (velocity <= 0) { noteOff(note); return; }
+void Synth::voiceOn(int note, int velocity) {
+    if (velocity <= 0) { voiceOff(note); return; }
     note = std::clamp(note, 0, 127);
 
     Voice* pick = nullptr;
@@ -100,7 +100,7 @@ void Synth::noteOn(int note, int velocity) {
     startVoice(*pick, note, velocity, fresh);
 }
 
-void Synth::noteOff(int note) {
+void Synth::voiceOff(int note) {
     for (int i = 0; i < numVoices_; ++i) {
         Voice& v = voices_[i];
         if (v.note == note && v.gate) {
@@ -113,6 +113,11 @@ void Synth::noteOff(int note) {
 
 void Synth::allNotesOff(bool hard) {
     sustain_ = false;
+    arpN_ = 0;
+    arpCurrent_ = -1;
+    gateOff_ = -1;
+    keysDown_ = 0;
+    std::fill(std::begin(keyCount_), std::end(keyCount_), 0);
     for (int i = 0; i < kMaxVoices; ++i) {
         Voice& v = voices_[i];
         v.gate = false;
@@ -120,6 +125,177 @@ void Synth::allNotesOff(bool hard) {
         if (hard) { v.amp.kill(); v.mod.kill(); v.note = -1; }
         else { v.amp.gateOff(); v.mod.gateOff(); }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Keys: chord memory, then the arpeggiator (or straight to the voices).
+
+static const int kChordNotes[9][4] = {
+    {0, -1, -1, -1}, {0, 4, 7, -1}, {0, 3, 7, -1}, {0, 4, 7, 10}, {0, 4, 7, 11},
+    {0, 3, 7, 10},   {0, 5, 7, -1}, {0, 7, -1, -1}, {0, 12, -1, -1},
+};
+
+void Synth::noteOn(int note, int velocity) {
+    if (velocity <= 0) { noteOff(note); return; }
+    note = std::clamp(note, 0, 127);
+    const int chord = std::clamp(static_cast<int>(target_[P_CHORD]), 0, 8);
+    const bool arp = target_[P_ARP_MODE] >= 0.5f;
+    if (arp && target_[P_ARP_HOLD] >= 0.5f && keysDown_ == 0) arpN_ = 0;  // held notes: a new chord replaces them
+    if (keyCount_[note] == 0) ++keysDown_;
+    keyCount_[note] = 0;
+    for (int k = 0; k < 4 && kChordNotes[chord][k] >= 0; ++k) {
+        int n = note + kChordNotes[chord][k];
+        if (n > 127) continue;
+        keyNotes_[note][keyCount_[note]++] = static_cast<int8_t>(n);
+        if (arp) arpAdd(n, velocity);
+        else voiceOn(n, velocity);
+    }
+}
+
+void Synth::noteOff(int note) {
+    note = std::clamp(note, 0, 127);
+    if (keyCount_[note] == 0) { voiceOff(note); return; }
+    const bool arp = target_[P_ARP_MODE] >= 0.5f;
+    const bool hold = target_[P_ARP_HOLD] >= 0.5f;
+    for (int k = 0; k < keyCount_[note]; ++k) {
+        int n = keyNotes_[note][k];
+        voiceOff(n);                 // (a note started before the arpeggiator went on)
+        if (arp && !hold) arpRemove(n);
+    }
+    keyCount_[note] = 0;
+    if (keysDown_ > 0) --keysDown_;
+}
+
+void Synth::arpAdd(int note, int vel) {
+    for (int i = 0; i < arpN_; ++i)
+        if (arpNotes_[i] == note) { arpVels_[i] = vel; return; }
+    if (arpN_ < 16) { arpNotes_[arpN_] = note; arpVels_[arpN_] = vel; ++arpN_; }
+}
+
+void Synth::arpRemove(int note) {
+    for (int i = 0; i < arpN_; ++i) {
+        if (arpNotes_[i] != note) continue;
+        for (int j = i; j < arpN_ - 1; ++j) { arpNotes_[j] = arpNotes_[j + 1]; arpVels_[j] = arpVels_[j + 1]; }
+        --arpN_;
+        return;
+    }
+}
+
+bool Synth::pickArpNote(int mode, int& note, int& vel) {
+    if (arpN_ == 0) return false;
+    int base[16], bvel[16];
+    for (int i = 0; i < arpN_; ++i) { base[i] = arpNotes_[i]; bvel[i] = arpVels_[i]; }
+    if (mode != 5) {  // sorted low to high (5: as played)
+        for (int i = 1; i < arpN_; ++i)
+            for (int j = i; j > 0 && base[j - 1] > base[j]; --j) { std::swap(base[j - 1], base[j]); std::swap(bvel[j - 1], bvel[j]); }
+    }
+    const int oct = std::clamp(static_cast<int>(target_[P_ARP_OCT]), 1, 4);
+    const int len = arpN_ * oct;
+    int idx;
+    switch (mode) {
+        case 2: idx = len - 1 - (arpStep_ % len); break;                      // down
+        case 3: {                                                             // up/down (ends once)
+            int cyc = len > 1 ? 2 * len - 2 : 1;
+            int k = arpStep_ % cyc;
+            idx = k < len ? k : cyc - k;
+            break;
+        }
+        case 4: idx = static_cast<int>(rng_.uni() * len) % len; break;        // random
+        default: idx = arpStep_ % len; break;                                  // up / as played
+    }
+    ++arpStep_;
+    note = std::min(127, base[idx % arpN_] + 12 * (idx / arpN_));
+    vel = bvel[idx % arpN_];
+    return true;
+}
+
+void Synth::runArp() {
+    const int mode = static_cast<int>(target_[P_ARP_MODE]);
+    if (mode <= 0) {
+        if (arpCurrent_ >= 0) { voiceOff(arpCurrent_); arpCurrent_ = -1; }
+        arpWasOn_ = false;
+        arpN_ = 0;
+        return;
+    }
+    const double step = kDivisions[std::clamp(static_cast<int>(target_[P_ARP_RATE]), 1, kNumDivisions - 1)].beats;
+    if (!arpWasOn_ || beats_ - nextStep_ > step * 4 || nextStep_ - beats_ > step * 4) {
+        nextStep_ = std::ceil(beats_ / step - 1e-9) * step;   // line up with the grid
+        arpWasOn_ = true;
+    }
+    if (gateOff_ >= 0 && beats_ >= gateOff_) {
+        if (arpCurrent_ >= 0) voiceOff(arpCurrent_);
+        arpCurrent_ = -1;
+        gateOff_ = -1;
+    }
+    if (beats_ < nextStep_) return;
+    const double start = nextStep_;
+    nextStep_ += step;
+    if (arpCurrent_ >= 0) { voiceOff(arpCurrent_); arpCurrent_ = -1; }
+    int note, vel;
+    if (!pickArpNote(mode, note, vel)) { arpStep_ = 0; return; }
+    voiceOn(note, vel);
+    arpCurrent_ = note;
+    gateOff_ = start + step * clampf(target_[P_ARP_GATE], 0.05f, 1.0f) * 0.98;
+}
+
+// ---------------------------------------------------------------------------
+// Clock
+
+void Synth::midiClock(double senderTime) {
+    const uint64_t t = samplePos_;
+    // Time each tick on the sender's clock when we have it (precise); else by arrival
+    // here, which is only as fine as one audio period, so average over more ticks.
+    double when;
+    if (senderTime >= 0) {
+        if (lastSender_ >= 0 && senderTime < lastSender_ - 1000.0) nTicks_ = 0;   // the sender's clock wrapped
+        lastSender_ = senderTime;
+        when = senderTime;
+    } else {
+        when = static_cast<double>(t) / sr_;
+    }
+    tickTimes_[tickW_] = when;
+    tickW_ = (tickW_ + 1) % kTickWin;
+    if (nTicks_ < kTickWin) ++nTicks_;
+    if (extClock_) tickBeat_ += 1.0 / 24.0;
+    if (nTicks_ >= 7) {
+        double oldest = tickTimes_[(tickW_ - nTicks_ + 2 * kTickWin) % kTickWin];
+        double interval = (when - oldest) / (nTicks_ - 1);
+        if (interval > 0) {
+            float raw = clampf(static_cast<float>(60.0 / (interval * 24.0)), 20.0f, 300.0f);
+            extBpm_ = extClock_ ? extBpm_ + (raw - extBpm_) * 0.1f : raw;
+            if (std::fabs(extBpm_ - extBpmShown_) > 0.2f) extBpmShown_ = std::round(extBpm_ * 10.0f) / 10.0f;
+        }
+        if (!extClock_) {         // start following: carry on from where we are
+            extClock_ = true;
+            tickBeat_ = beats_;
+            extBpmShown_ = std::round(extBpm_ * 10.0f) / 10.0f;
+        }
+    }
+    lastTickSample_ = t;
+}
+
+void Synth::midiStart() {
+    beats_ = 0;
+    tickBeat_ = -1.0 / 24.0;     // the next tick is the downbeat
+    arpWasOn_ = false;
+    arpStep_ = 0;
+}
+
+void Synth::advanceClock(int n) {
+    if (extClock_ && samplePos_ - lastTickSample_ > static_cast<uint64_t>(sr_ * 0.5f)) {
+        extClock_ = false;        // clock stopped arriving: back to the internal tempo
+        nTicks_ = 0;
+        lastSender_ = -1;
+    }
+    if (extClock_) {
+        bpm_ = extBpmShown_;
+        double proj = tickBeat_ + static_cast<double>(samplePos_ - lastTickSample_) * bpm_ / 60.0 / sr_;
+        beats_ = std::max(beats_, std::min(proj, tickBeat_ + 1.0 / 24.0));
+    } else {
+        bpm_ = clampf(status_ ? status_->tempo.load(std::memory_order_relaxed) : 120.0f, 20.0f, 300.0f);
+        beats_ += static_cast<double>(n) * bpm_ / 60.0 / sr_;
+    }
+    samplePos_ += static_cast<uint64_t>(n);
 }
 
 void Synth::pitchBend(float amount) { bend_ = std::clamp(amount, -1.0f, 1.0f); }
@@ -186,6 +362,8 @@ void Synth::render(float* left, float* right, int n) {
         status_->voices.store(activeVoices(), std::memory_order_relaxed);
         status_->lfo.store(lfoValue_, std::memory_order_relaxed);
         status_->livePos[0].store(livePos_[0] >= 0 ? livePos_[0] : target_[P_A_POS], std::memory_order_relaxed);
+        status_->bpmNow.store(bpm_, std::memory_order_relaxed);
+        status_->extClock.store(extClock_, std::memory_order_relaxed);
         status_->livePos[1].store(livePos_[1] >= 0 ? livePos_[1] : target_[P_B_POS], std::memory_order_relaxed);
     }
 }
@@ -202,9 +380,20 @@ void Synth::renderBlock(float* left, float* right, int n) {
     float g = target_[P_GLIDE];
     glideCoef_ = g > 0.0005f ? std::exp(-4.6f / (g * ctrlRate)) : 0.0f;
 
-    // Global LFO.
-    lfoPhase_ += smooth_[P_LFO_RATE] * n / sr_;
-    if (lfoPhase_ >= 1.0f) { lfoPhase_ -= std::floor(lfoPhase_); lfoSH_ = rng_.bi(); }
+    advanceClock(n);
+    runArp();
+
+    // Global LFO: free (Hz) or locked to a note division of the tempo.
+    const int lfoSync = static_cast<int>(target_[P_LFO_SYNC]);
+    if (lfoSync > 0 && lfoSync < kNumDivisions) {
+        double div = kDivisions[lfoSync].beats;
+        float ph = static_cast<float>(beats_ / div - std::floor(beats_ / div));
+        if (ph < lfoPhase_) lfoSH_ = rng_.bi();
+        lfoPhase_ = ph;
+    } else {
+        lfoPhase_ += smooth_[P_LFO_RATE] * n / sr_;
+        if (lfoPhase_ >= 1.0f) { lfoPhase_ -= std::floor(lfoPhase_); lfoSH_ = rng_.bi(); }
+    }
     switch (static_cast<int>(target_[P_LFO_SHAPE])) {
         case 0: lfoValue_ = std::sin(2.0f * kPi * lfoPhase_); break;
         case 1: lfoValue_ = 1.0f - 4.0f * std::fabs(lfoPhase_ - 0.5f); break;

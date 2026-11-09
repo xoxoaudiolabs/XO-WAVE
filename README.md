@@ -85,9 +85,9 @@ Tabs along the bottom:
 | **OSC** | 3D wavetable view (the frame being played is drawn in signal red and follows modulation live). Drag on it to scan the table. OSC A / OSC B switch, wavetable picker, position, level, semi, fine, unison, detune |
 | **FILTER** | Low / band / high-pass, live response curve, cutoff, resonance, envelope amount, key tracking, drive, velocity |
 | **ENV** | Amp and mod envelopes with shape previews |
-| **MOD** | LFO shape/rate and destinations, mod-env → position, velocity, glide, bend range, stereo spread, volume |
+| **MOD** | LFO shape/rate (free or synced to the tempo) and destinations, mod-env → position, velocity, glide, bend range, stereo spread, volume |
 | **FX** | Delay (free or synced to the tempo: 1/32 to 4 bars, triplets and dotted; feedback, tone, ping-pong), chorus, reverb (size, damping) and a bus drive before them |
-| **KEYS** | Two-octave keyboard, octave shift, hold (latch), all notes off |
+| **PLAY** | Arpeggiator (up, down, up/down, random, as played; rate, octaves, gate, hold), chord memory (maj, min, 7, maj7, min7, sus4, 5th, oct), tempo, and a two-octave keyboard with octave shift, latch and all notes off |
 | **PRESETS** | Load, save, save as (on-screen keyboard), delete |
 | **SETTINGS** | MIDI (channel, MIDI learn, connected inputs) · Bluetooth (scan & pair, forget, latency) · Audio (buffer, polyphony) · Display (touch calibration, knob speed) · System (status, restart, reboot, shut down) |
 
@@ -96,6 +96,10 @@ Knobs: touch a knob and drag **up or right** to turn it up. The top bar shows th
 The screen calibrates itself the first time XO-Wave starts: tap the four targets. You can redo this in **SETTINGS → DISPLAY**. Settings changed on the screen are saved to `/var/lib/xowave/state.conf`.
 
 The UI uses [LVGL](https://lvgl.io) (MIT), with the **Anton** and **IBM Plex Mono** fonts (SIL Open Font License, see `fonts/`).
+
+## Tempo and MIDI clock
+
+XO-Wave follows MIDI clock from a linked Studio (timed by the Studio's own timestamps, so it locks to the exact tempo) or a USB device, including start/stop; the synced delay, LFO and arpeggiator follow it. With no clock coming in, it runs on its own tempo, set on the PLAY page and remembered.
 
 ## Linking to XOXO Studio (Ethernet)
 

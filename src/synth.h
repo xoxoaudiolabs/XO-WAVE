@@ -28,9 +28,16 @@ public:
 
     Synth(float sampleRate, int voices, const std::vector<Wavetable>& tables);
 
-    // MIDI
+    // MIDI (keys go through chord memory and the arpeggiator)
     void noteOn(int note, int velocity);
     void noteOff(int note);
+    // MIDI clock (24 per quarter note), start / continue / stop.
+    // senderTime: the tick's time on the sender's clock (s), when known (network MIDI);
+    // else it's timed by when it arrives here.
+    void midiClock(double senderTime = -1);
+    void midiStart();
+    void midiContinue() {}
+    void midiStop() {}
     void controlChange(int cc, int value);
     void pitchBend(float amount);  // -1 .. 1
     void programChange(int program);
@@ -72,6 +79,13 @@ private:
     void renderOsc(const Wavetable& wt, float pos, float pitch, float level, int unison,
                    float detune, float* phases, float* bufL, float* bufR, int n);
     void startVoice(Voice& v, int note, int velocity, bool fresh);
+    void voiceOn(int note, int velocity);
+    void voiceOff(int note);
+    void advanceClock(int n);
+    void runArp();
+    bool pickArpNote(int mode, int& note, int& vel);
+    void arpAdd(int note, int vel);
+    void arpRemove(int note);
 
     float sr_;
     int numVoices_;
@@ -96,6 +110,27 @@ private:
     float masterSmooth_ = 0.64f;
     FxBus fx_;
     float bpm_ = 120.0f;   // tempo for synced effects (external MIDI clock or the internal tempo)
+
+    // Clock: song position in quarter notes, from MIDI clock ticks or the internal tempo.
+    double beats_ = 0, tickBeat_ = 0;
+    uint64_t samplePos_ = 0, lastTickSample_ = 0;
+    bool extClock_ = false;
+    float extBpm_ = 120.0f, extBpmShown_ = 120.0f;
+    static constexpr int kTickWin = 49;   // 2 beats of ticks
+    double tickTimes_[kTickWin] = {};
+    double lastSender_ = -1;
+    int tickW_ = 0, nTicks_ = 0;
+
+    // Keys -> chord memory: the notes each held key started.
+    int8_t keyNotes_[128][4];
+    uint8_t keyCount_[128] = {};
+    int keysDown_ = 0;
+
+    // Arpeggiator
+    int arpNotes_[64], arpVels_[64];
+    int arpN_ = 0, arpStep_ = 0, arpCurrent_ = -1;
+    double nextStep_ = 0, gateOff_ = -1;
+    bool arpWasOn_ = false;
     float panL_[kMaxUnison + 1][kMaxUnison], panR_[kMaxUnison + 1][kMaxUnison];
     Rng rng_;
 };
