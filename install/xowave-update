@@ -1,15 +1,14 @@
 #!/usr/bin/env bash
-# XO-Wave updates from the private GitHub repo, with this Pi's read-only deploy key.
+# XO-Wave updates from its public GitHub repo (HTTPS, no account or key needed).
 #   xowave-update check     is there a newer version? (prints one line)
 #   xowave-update install   fetch, build, test, install, restart; rolls back if it won't start
-#   xowave-update key       print this Pi's public key (add it to the repo as a read-only deploy key)
 # Runs as root (sudo, or xowave-update.service). Progress goes to /var/lib/xowave/update.log.
 set -uo pipefail
-REPO=git@github.com:xoxoaudiolabs/XO-WAVE.git
+REPO=https://github.com/xoxoaudiolabs/XO-WAVE.git
 SRC=/opt/xowave/src
-KEY=/etc/xowave/deploy_key
 LOG=/var/lib/xowave/update.log
-export GIT_SSH_COMMAND="ssh -i $KEY -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=15 -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/etc/xowave/known_hosts"
+export GIT_TERMINAL_PROMPT=0   # never wait for a password
+GITNET=(-c http.lowSpeedLimit=1000 -c http.lowSpeedTime=15)   # give up on a dead connection
 export PATH="$PATH:/usr/sbin:/sbin"
 
 say() { echo "$*"; [[ ${LOGGING:-0} == 1 ]] && echo "$*" >> "$LOG"; }
@@ -17,23 +16,16 @@ installed() { cat /opt/xowave/VERSION 2>/dev/null || echo "?"; }
 
 fetch() {
     if ! command -v git >/dev/null; then say "ERROR: GIT ISN'T INSTALLED (sudo apt install git)"; return 1; fi
-    if [[ ! -f $KEY ]]; then say "ERROR: NO DEPLOY KEY ($KEY)"; return 1; fi
     if [[ -d $SRC/.git ]]; then
-        git -C "$SRC" fetch -q origin main 2>>"$LOG.err" || { say "ERROR: CAN'T REACH GITHUB"; return 1; }
+        git -C "$SRC" remote set-url origin "$REPO"   # older installs cloned over SSH
+        git -C "$SRC" "${GITNET[@]}" fetch -q origin main 2>>"$LOG.err" || { say "ERROR: CAN'T REACH GITHUB"; return 1; }
     else
         rm -rf "$SRC"
-        git clone -q --branch main "$REPO" "$SRC" 2>>"$LOG.err" || { say "ERROR: CAN'T REACH GITHUB (OR THE KEY ISN'T ADDED)"; return 1; }
+        git "${GITNET[@]}" clone -q --branch main "$REPO" "$SRC" 2>>"$LOG.err" || { say "ERROR: CAN'T REACH GITHUB"; return 1; }
     fi
 }
 
 case ${1:-check} in
-key)
-    if [[ ! -f $KEY ]]; then
-        install -d -m700 /etc/xowave
-        ssh-keygen -q -t ed25519 -N "" -C "xowave@$(hostname)" -f "$KEY"
-    fi
-    cat "$KEY.pub"
-    ;;
 check)
     fetch || exit 1
     new=$(git -C "$SRC" show origin/main:VERSION 2>/dev/null || echo "?")
@@ -71,5 +63,5 @@ install)
     echo "$head" > /opt/xowave/COMMIT
     say "DONE: $(installed) ($head)"
     ;;
-*) sed -n '2,6p' "$0"; exit 1 ;;
+*) sed -n '2,4p' "$0"; exit 1 ;;
 esac

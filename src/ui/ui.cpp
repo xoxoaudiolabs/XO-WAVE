@@ -2484,7 +2484,7 @@ void doReboot(lv_event_t*) {
 }
 void rebootEvent(lv_event_t*) { confirmAction("Reboot the Pi?", "REBOOT", doReboot); }
 
-// UPDATE: from the private GitHub repo with this Pi's read-only deploy key (xowave-update).
+// UPDATE: from the public GitHub repo over HTTPS (xowave-update).
 void updCheck(lv_event_t*) {
     if (S->updState.load() == 1 || S->updState.load() == 3) return;
     if (S->updStatus) lv_label_set_text(S->updStatus, "CHECKING GITHUB...");

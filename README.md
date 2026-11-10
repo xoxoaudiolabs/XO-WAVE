@@ -6,7 +6,7 @@ Boots straight into an 8-voice (up to 16) stereo wavetable synth. No screen, no 
 - **MIDI in:** USB MIDI controllers and **Bluetooth (BLE) MIDI** controllers, auto-connected, hot-pluggable
 - 2 wavetable oscillators per voice with up to 4× unison, stereo spread, multimode filter, 2 envelopes, LFO, glide
 - 10 built-in wavetables. You can add your own Serum-style `.wav` wavetables
-- 8 presets, switched with MIDI program change
+- 96 factory presets, switched on the screen, from the web app or with MIDI program change
 - **Touchscreen UI** on a 3.5" SPI TFT (480×320, ILI9486 + ADS7846 touch) in the XOXO//AUDIO//LABS look
 
 ## Hardware
@@ -18,7 +18,7 @@ Boots straight into an 8-voice (up to 16) stereo wavetable synth. No screen, no 
 
 ## 1. Flash the SD card
 
-1. Install **Raspberry Pi Imager** on your Mac.
+1. Install **Raspberry Pi Imager** on your computer.
 2. Choose **Raspberry Pi 3** → **Raspberry Pi OS Lite (64-bit)**.
 3. Click **Edit settings**:
    - Hostname: `xowave` (if you already set `xo4`, use `xo4.local` in the commands below)
@@ -27,19 +27,17 @@ Boots straight into an 8-voice (up to 16) stereo wavetable synth. No screen, no 
    - Services tab: **Enable SSH** → password auth, or paste your public key (`cat ~/.ssh/id_ed25519.pub`)
 4. Write the card, put it in the Pi, power on, wait ~2 minutes.
 
-## 2. Copy XO-Wave to the Pi and install
-
-From the Mac:
-
-```bash
-rsync -av --exclude build --exclude /xowave --exclude demo.wav "$HOME/Desktop/Claude Code/XOXO Audio Lab/XO-4 Standalone /" pi@xowave.local:xowave/
-```
+## 2. Get XO-Wave onto the Pi and install
 
 ```bash
 ssh pi@xowave.local
 ```
 
 On the Pi:
+
+```bash
+sudo apt install -y git && git clone https://github.com/xoxoaudiolabs/XO-WAVE.git ~/xowave
+```
 
 ```bash
 cd ~/xowave && sudo ./install/setup.sh
@@ -132,7 +130,7 @@ Tested: the session, MIDI both ways and the audio packets against XOXO Studio's 
 | 26 | Filter envelope amount | 27 | Mod env → position |
 | 7 | Volume | 5 | Glide |
 
-Change these in `/etc/xowave.conf` (`cc.<number> = <parameter>`). `xowave --list-params` lists every parameter. Program change 0–7 selects a preset.
+Change these in `/etc/xowave.conf` (`cc.<number> = <parameter>`). `xowave --list-params` lists every parameter. Program change 0–95 selects a preset (numbers past the last preset wrap around).
 
 ## Presets and wavetables
 
@@ -146,9 +144,9 @@ Built-in tables: Basic Shapes (sine→tri→saw→square), PWM, Sync Saw, Forman
 
 ## Updates
 
-**SETTINGS → SYSTEM → UPDATE** checks [xoxoaudiolabs/XO-WAVE](https://github.com/xoxoaudiolabs/XO-WAVE) for a newer version; **INSTALL** fetches it, builds and tests it on the Pi, installs it and restarts XO-Wave (a few minutes). If the build or tests fail nothing changes, and if the new version won't start the old one is put back. Your settings, presets and session are kept.
+**SETTINGS → SYSTEM → UPDATE** checks [xoxoaudiolabs/XO-WAVE](https://github.com/xoxoaudiolabs/XO-WAVE) for a newer version; **INSTALL** fetches it, builds and tests it on the Pi, installs it and restarts XO-Wave (a few minutes). If the build or tests fail nothing changes, and if the new version won't start the old one is put back. Your settings, presets and session are kept. Updates come over plain HTTPS from the public repo, so no GitHub account or key is needed, just an internet connection.
 
-The repo is private, so each Pi uses its own **read-only deploy key** (`/etc/xowave/deploy_key`). The installer creates it and prints the public key; add it at *github.com/xoxoaudiolabs/XO-WAVE → Settings → Deploy keys* (leave "Allow write access" off). From a terminal: `sudo xowave-update check` / `sudo xowave-update install`; progress is in `/var/lib/xowave/update.log`.
+From a terminal: `sudo xowave-update check` / `sudo xowave-update install`; progress is in `/var/lib/xowave/update.log`.
 
 ## Troubleshooting
 
@@ -193,3 +191,7 @@ make netfuzz SAN=1
 `stress` throws random MIDI storms, parameter changes (including out-of-range ones), presets, arpeggiator/chord/hold/sustain toggling and MIDI clock at the engine and checks the output stays finite and bounded, notes always end, and periods stay on time. `filefuzz` feeds hostile WAVs and preset/settings files; `netfuzz` hostile HTTP requests and random Studio-link packets.
 
 Code layout: `src/ui/` (touchscreen UI), `src/engine_link.h` (lock-free UI ↔ audio link), `src/synth.*` (voices and modulation), `src/wavetable.*` (band-limited mipmapped tables), `src/dsp.h` (filter and envelopes), `src/alsa_io.*` (audio and MIDI), `src/bt_output.*` (Bluetooth output), `install/` (Pi setup and services).
+
+## License
+
+XO-Wave is free software under the [GNU General Public License v3.0](LICENSE), the same as XOXO Studio. Bundled third-party code keeps its own license: [LVGL](third_party/lvgl/LICENCE.txt) (MIT) and the Anton and IBM Plex Mono fonts (SIL Open Font License, [`fonts/`](fonts/)).

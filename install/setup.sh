@@ -56,7 +56,7 @@ touch /var/lib/xowave/update.log /var/lib/xowave/update.log.err 2>/dev/null; chm
 usermod -aG audio,bluetooth,input,video "$RUN_USER"
 
 # Let the touchscreen run the Bluetooth helper, reboot and power off.
-echo "$RUN_USER ALL=(root) NOPASSWD: /usr/local/bin/xowave-bt, /usr/sbin/reboot, /usr/sbin/poweroff, /usr/local/bin/xowave-update check, /usr/local/bin/xowave-update key, /usr/bin/systemctl start --no-block xowave-update.service" > /etc/sudoers.d/xowave
+echo "$RUN_USER ALL=(root) NOPASSWD: /usr/local/bin/xowave-bt, /usr/sbin/reboot, /usr/sbin/poweroff, /usr/local/bin/xowave-update check, /usr/bin/systemctl start --no-block xowave-update.service" > /etc/sudoers.d/xowave
 chmod 440 /etc/sudoers.d/xowave
 visudo -cf /etc/sudoers.d/xowave >/dev/null || { echo "!! sudoers rule invalid, removing"; rm -f /etc/sudoers.d/xowave; }
 
@@ -109,14 +109,6 @@ systemctl enable --now xowave-bt-keeper
 systemctl enable xowave
 systemctl restart xowave
 
-if [[ $UPDATE == 0 ]]; then
-cat <<EOF
-
-Updates: add this Pi's key to github.com/xoxoaudiolabs/XO-WAVE > Settings > Deploy keys
-(read-only), then use SETTINGS > SYSTEM > UPDATE on the screen:
-  $(/usr/local/bin/xowave-update key)
-EOF
-fi
 [[ $UPDATE == 1 ]] && exit 0
 cat <<EOF
 
