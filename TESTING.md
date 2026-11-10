@@ -30,6 +30,7 @@ The Mac runs the fuzz tests with AddressSanitizer and UBSan. The Pi runs them wi
 - [x] Studio link, MIDI only, to a real XOXO Studio over Wi-Fi
 - [x] Network update over the deploy key (private repo): 0.3.5 → 0.3.6 built, passed its tests and installed on the Pi
 - [x] Web app layout on a phone-size screen (375 px)
+- [x] Update check and install over public HTTPS with no key (0.3.6 → 5776b5a); still works with the deploy key deleted from GitHub
 
 ## Left to test
 
@@ -37,8 +38,6 @@ Tick these off as you go.
 
 ### Install and updates
 - [ ] Fresh SD card: `git clone` install from the README, start to finish
-- [ ] After the repo is public: **UPDATE** check and install over HTTPS, no key
-- [ ] Then delete the deploy keys on GitHub, and confirm the check still works
 - [ ] Update rollback: a version that won't start puts the old one back
 
 ### Audio and MIDI
