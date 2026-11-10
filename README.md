@@ -9,6 +9,14 @@ Boots straight into an 8-voice (up to 16) stereo wavetable synth. No screen, no 
 - 96 factory presets, switched on the screen, from the web app or with MIDI program change
 - **Touchscreen UI** on a 3.5" SPI TFT (480×320, ILI9486 + ADS7846 touch) in the XOXO//AUDIO//LABS look
 
+| | |
+|---|---|
+| ![OSC page: 3D wavetable view](docs/screenshots/1-osc-a.png) | ![FILTER page](docs/screenshots/2-filter.png) |
+| ![MOD page: matrix](docs/screenshots/4-mod-matrix.png) | ![FX page](docs/screenshots/4b-fx.png) |
+| ![PLAY page: arpeggiator, chords, keyboard](docs/screenshots/5-play.png) | ![PRESETS page](docs/screenshots/6-presets.png) |
+
+Every page is in [`docs/screenshots/`](docs/screenshots/) (rendered with `--ui-snapshot`). What has and hasn't been tested on hardware is in [TESTING.md](TESTING.md).
+
 ## Hardware
 
 - Raspberry Pi 3 Model B (v1.2), 5 V / 2.5 A supply, 8 GB+ microSD
@@ -96,6 +104,8 @@ The screen calibrates itself the first time XO-Wave starts: tap the four targets
 The UI uses [LVGL](https://lvgl.io) (MIT), with the **Anton** and **IBM Plex Mono** fonts (SIL Open Font License, see `fonts/`).
 
 ## Web app (phone or computer)
+
+<img src="docs/screenshots/web-desktop.png" alt="Web app on a computer" width="68%"> <img src="docs/screenshots/web-phone.png" alt="Web app on a phone" width="22%">
 
 Open **http://xo-wave.local** on anything on the same network (or the cable): every parameter grouped like the touchscreen pages, presets (◀ ▶ and a list), master volume, tempo and a one-octave keyboard, in the XOXO look. Changes show on the touchscreen too, and the page follows changes made on XO-Wave. It's plain HTTP with no password, like XOXO Studio's web page: anyone on the network can use it. Turn it off with `web.enabled = off`.
 
